@@ -1801,6 +1801,24 @@
   const knot = (u, out) => out.set(Math.sin(u) + 2 * Math.sin(2 * u), Math.cos(u) - 2 * Math.cos(2 * u), -Math.sin(3 * u)).multiplyScalar(0.62);
   const lemniscate = (u, out) => { const d = 1 + Math.sin(u) ** 2; return out.set((2.7 * Math.cos(u)) / d, 0.38 * Math.sin(u), (2.7 * Math.sin(u) * Math.cos(u)) / d); };
 
+  // Conveyor II: the photos as one seamless ribbon on Conveyor's two-roller loop: CV2.n cards exactly tile its length
+  // (no gaps, square corners), each bending with the loop round the drums. The ribbon twists about its own length as
+  // it goes, CV2.turns full turns round the loop (whole turns, so it meets itself without a seam), the twist slowly
+  // drifting so the ribbon seems to turn over as it travels. CV2.Ls is each straight run, CV2.R a drum's radius.
+  const CV2 = { n: 22, Ls: 4.4, R: 0.95, h: 1.45, turns: 2, tilt: [0.26, -0.36, 0.25] };
+  CV2.per = 2 * CV2.Ls + TAU * CV2.R;
+  // The loop's centre line at length d along it (clockwise from the top run's left end), in its plane, with its
+  // outward normal (nx, ny).
+  const _cv2 = { x: 0, y: 0, nx: 0, ny: 1 };
+  function cv2At(d) {
+    const { Ls, R } = CV2;
+    d = wrap(d / CV2.per) * CV2.per;
+    if (d < Ls) { _cv2.x = -Ls / 2 + d; _cv2.y = R; _cv2.nx = 0; _cv2.ny = 1; }
+    else if ((d -= Ls) < PI * R) { const b = d / R; _cv2.nx = Math.sin(b); _cv2.ny = Math.cos(b); _cv2.x = Ls / 2 + R * _cv2.nx; _cv2.y = R * _cv2.ny; }
+    else if ((d -= PI * R) < Ls) { _cv2.x = Ls / 2 - d; _cv2.y = -R; _cv2.nx = 0; _cv2.ny = -1; }
+    else { const b = PI + (d - Ls) / R; _cv2.nx = Math.sin(b); _cv2.ny = Math.cos(b); _cv2.x = -Ls / 2 + R * _cv2.nx; _cv2.y = R * _cv2.ny; }
+    return _cv2;
+  }
   const LAYOUTS = [
     // ---- Rings: the original nine --------------------------------------------------
     ring('cobalt', 'Orbit', 'cobalt', { tilt: 0.34, roll: 0.12, dist: 2.7, spin: 0.14, fill: 0.93, aspect: 1.0, corner: 0.085, drop: 0.06 }),
@@ -2659,6 +2677,23 @@
         else { d -= Ls; beta = PI + d / R; o.p.set(-Ls / 2 + R * Math.sin(beta), R * Math.cos(beta), 0); }
         o.q.setFromAxisAngle(AZ, -beta).multiply(_q2.setFromAxisAngle(AX, -PI / 2)); o.s = 1;
       } },
+    { key: 'conveyor2', label: 'Conveyor II', cat: 'Flows', pal: 'conveyor', deck: 'base', count: CV2.n, w: CV2.per / CV2.n, h: CV2.h, bend: 0, corner: 0,
+      // Conveyor's own angle (elevation 0.42, azimuth 0.3), at the distance its framing settles to, fixed: every card's place is the belt's
+      // centre here, so automatic framing would see nothing to fit.
+      spin: 0.25, segs: [24, 4], view: { fixed: { pos: [0, 1.85, 7.95], target: [0, 0.12, 0], fov: 38 } },
+      // Each card is laid straight onto the ribbon: every point of it sits at its own length along the loop, so
+      // neighbouring cards meet edge to edge as one printed ribbon. Across the ribbon, a point lies along the loop's
+      // width direction turned about the loop's line by the twist at that length (measured in space, so the twist holds
+      // its place while the photos run through it, and drifts slowly round).
+      deform: (i, s, L, u, v) => {
+        const d = ((i + u) / CV2.n + s.r * 0.1) * CV2.per, c = cv2At(d);
+        const tw = (TAU * CV2.turns * d) / CV2.per + s.t * 0.35, w = -v * L.h, cw = Math.cos(tw) * w, sw = Math.sin(tw) * w;
+        return [c.x + c.nx * sw, c.y + c.ny * sw, cw];
+      },
+      // The ribbon's whole shape comes from the deform; every card shares one place, the loop's centre, turned by
+      // CV2.tilt so the loop rises on a diagonal and leans toward the viewer, giving the composition its direction.
+      // Shifted a touch left: the lean brings the right end nearer (so larger), and this keeps equal margins.
+      pose(i, o) { put(o, -0.38, 0, 0, CV2.tilt[0], CV2.tilt[1], CV2.tilt[2]); } },
     { key: 'fountain', label: 'Fountain', cat: 'Flows', pal: 'drift', deck: 'drift', texW: 380, count: 115, w: 0.78, h: 1.0, bend: 0, corner: 0.05, spin: 0.2,
       view: { fixed: { pos: [0, 1.2, 17], target: [0, 1.6, 0], fov: 45 } }, extra: fountainGlow, segs: [12, 1],
       // Each card bends in a soft curve across its width, the bend flexing back and forth as it flies like thin card in the air.
