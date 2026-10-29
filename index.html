@@ -371,6 +371,16 @@
     loopsculpture: { ...mkPal({ bg: '#000000', ink: '#EEF3EF', accent: '#2FA79C' }), bg: ['#000000', '#000000', '#000000'] },
     museum: mkPal({ bg: '#F0F0EE', ink: '#1A1A1A', accent: '#9A1B1F' }),
     mono: mkPal({ bg: '#F5F5F5', ink: '#0A0A0A', accent: '#0A0A0A', accentInk: '#F5F5F5' }),
+    // Silk Ribbon: off-white seamless paper, every photo toned to the same warm beige, soft in contrast, so the ribbon
+    // reads as one sheet of satin with the pictures held faintly in it.
+    ribbon: { ...mkPal({ bg: '#EEEDEA', ink: '#161514', accent: '#161514', accentInk: '#EEEDEA' }), bg: ['#F7F6F4', '#EEEDEA', '#E2E0DC'],
+      photo: 'grayscale(1) contrast(0.42) brightness(1.5) sepia(0.45) saturate(1.05)' },
+    // Wave Blades II: a true-black page with white ink.
+    blackpage: { ...mkPal({ bg: '#000000', ink: '#F2F2F0', accent: '#F2F2F0', accentInk: '#000000' }), bg: ['#000000', '#000000', '#000000'] },
+    // Tunnel III: a clean white page with black ink, like a stroke logo.
+    whitepage: { ...mkPal({ bg: '#FFFFFF', ink: '#0A0A0A', accent: '#0A0A0A', accentInk: '#FFFFFF' }), bg: ['#FFFFFF', '#FFFFFF', '#FFFFFF'] },
+    crescendo: { ...mkPal({ bg: '#000000', ink: '#ECECEA', accent: '#ECECEA', accentInk: '#0A0A0A' }), bg: ['#000000', '#000000', '#000000'],
+      photo: 'grayscale(1) contrast(1.14) brightness(.98)' },
   };
 
   // =====================================================================================
@@ -1369,6 +1379,14 @@
     primary: [sw(0), sw(1), sw(2), P1, sw(3), sw(4), ARCH, sw(5), AA],
     // Photos alternating with numbered boxes — no plain colour panels.
     isometric: [P1, num('01'), ARCH, num('02'), P2, num('03'), ARCH, num('04'), P1, num('05'), P2, num('06'), ARCH, num('07')],
+    // Crescendo's portraits: one family of warm photos of people, in full colour.
+    crescendo: PC_PHOTOS.map((id) => ({ kind: 'image', src: pexels(id) })),
+    // Tunnel III's portraits: the same family of warm photos, in full colour.
+    tunnel3: PC_PHOTOS.map((id) => ({ kind: 'image', src: pexels(id) })),
+    // Wave Blades: one single photo, shared out across every blade.
+    blades: [{ kind: 'image', src: pexels(33807743) }],
+    // Silk Ribbon's photos, toned by its palette to one warm satin.
+    ribbon: PC_PHOTOS.map((id) => ({ kind: 'image', src: pexels(id), mono: true })),
   };
 
   // Each photo is fetched once and reused everywhere.
@@ -1791,6 +1809,83 @@
     const y = (k - 3) * 0.42 + 0.28 * Math.sin(3 * f - ph), tw = 0.4 * Math.sin(2 * f + ph * 0.8), up = v * L.h;
     return out.set((R + up * Math.sin(tw)) * Math.sin(f), y + up * Math.cos(tw), (R + up * Math.sin(tw)) * Math.cos(f));
   }
+  // Tunnel III: four rings packed close together (radii TUNNEL3_R), each broken open into a three-quarter arc like a
+  // stroke logo, all standing on one floor. The gap (a quarter round) alternates from ring to ring, upper left then
+  // lower right, so the arcs interlock; TUNNEL3_ARC is how much of each ring is drawn, the cards spread evenly along
+  // it at Tunnel's spacing. The arcs move like the dials of a combination lock: every T3.P seconds they turn half a
+  // round, neighbours in opposite directions, easing out of rest and back into it over T3.run seconds, then hold.
+  // Half a turn swaps the two gap positions, so at every rest the arcs lock back into the interlocking logo exactly.
+  const TUNNEL3_ARC = 0.75;
+  const TUNNEL3_R = [1.3, 1.95, 2.6, 3.25];
+  const TUNNEL3 = ringsMap(TUNNEL3_R.map((R) => Math.round((TAU * R * TUNNEL3_ARC) / 0.62)));
+  // The opening clock (kept by tunnel3Stage), and the lock's rhythm: the first turn starts T3.at seconds in, once the
+  // arcs have drawn on.
+  const T3 = { el: 99, at: 3.0, P: 6.5, run: 3.4 };
+  // Half-turns made so far: whole ones done, plus the current one eased in and out (a smooth quintic).
+  const tunnel3Turns = () => {
+    const t = Math.max(0, T3.el - T3.at), n = Math.floor(t / T3.P), f = clamp((t - n * T3.P) / T3.run);
+    return n + f * f * f * (f * (6 * f - 15) + 10);
+  };
+  // Card i's size: every card the same, growing in on opening as each arc draws itself on from one end to the other,
+  // like a pen stroke, inner ring first.
+  const tunnel3Size = (i) => {
+    const { k, j, nk } = TUNNEL3[i], f = (j + 0.5) / nk;
+    const g = clamp((T3.el - 0.25 - k * 0.22 - f * 1.1) / 0.45);
+    return 1 - Math.pow(1 - g, 3);
+  };
+  const tunnel3A = (i, s) => {
+    const { k, j, nk } = TUNNEL3[i], gap = k % 2 ? PI / 4 : (5 * PI) / 4, open = TAU * (1 - TUNNEL3_ARC);
+    return gap + open / 2 + ((j + 0.5) / nk) * TAU * TUNNEL3_ARC + (k % 2 ? -1 : 1) * (tunnel3Turns() * PI + s.r * 0.6);
+  };
+  // Tunnel III's studio light: a soft key from the upper left front, each card darkening a touch toward its foot.
+  const T3_TINT = { uniforms: {}, glsl: `float tint(vec3 p) {
+        vec3 n = normalize(vWN), vd = normalize(cameraPosition - p);
+        if (dot(n, vd) < 0.0) n = -n;
+        float d = max(dot(n, normalize(vec3(-0.4, 0.75, 0.55))), 0.0);
+        return (0.78 + 0.3 * d) * (0.9 + 0.1 * smoothstep(0.0, 0.7, p.y));
+      }` };
+  // Tunnel III's stage. The title printed small on the floor at the heart of the rings, the quiet centre of the logo,
+  // fading in once the arcs have drawn on; every card reflected faintly in the floor, so the arcs stand on a softly
+  // polished white surface; and the opening clock.
+  function tunnel3Stage(group, L, faces) {
+    const c = document.createElement('canvas'); c.width = 1024; c.height = 320;
+    const g = c.getContext('2d');
+    g.fillStyle = '#0A0A0A'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `600 112px ${FONT}`; if ('letterSpacing' in g) g.letterSpacing = '30px';
+    g.fillText('TWIST BAND', 527, 132);
+    g.font = `500 34px ${FONT}`; if ('letterSpacing' in g) g.letterSpacing = '14px'; g.fillStyle = '#8A8A86';
+    g.fillText('OBJECT LIBRARY · FW26', 519, 238);
+    const tex = new THREE.CanvasTexture(c); tex.encoding = THREE.sRGBEncoding; tex.anisotropy = 8;
+    const tgeo = new THREE.PlaneGeometry(1.75, 0.55); tgeo.rotateX(-PI / 2);
+    const title = new THREE.Mesh(tgeo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false }));
+    title.position.set(0, 0.003, 0.05); title.renderOrder = -1; group.add(title);
+    // Reflections: each card mirrored through the floor, strongest at its foot and gone a third of the way down.
+    const ac = document.createElement('canvas'); ac.width = 4; ac.height = 128;
+    const ag = ac.getContext('2d'), agr = ag.createLinearGradient(0, 0, 0, 128);
+    agr.addColorStop(0, '#000000'); agr.addColorStop(0.66, '#000000'); agr.addColorStop(1, '#FFFFFF');
+    ag.fillStyle = agr; ag.fillRect(0, 0, 4, 128);
+    const amap = new THREE.CanvasTexture(ac), MR = new THREE.Matrix4().makeScale(1, -1, 1);
+    const holders = group.children.slice(0, L.count);
+    const mirrors = holders.map((h, i) => {
+      const m = new THREE.Mesh(h.children[0].geometry, new THREE.MeshBasicMaterial({ map: faces[L.faceOf(i) % faces.length].tex, alphaMap: amap,
+        transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }));
+      m.matrixAutoUpdate = false; m.frustumCulled = false; m.renderOrder = -2; group.add(m); return m;
+    });
+    let t0 = null;
+    return {
+      tick(s) {
+        if (t0 === null) t0 = s.t;
+        T3.el = s.t - t0;
+        title.material.opacity = smooth(2.2, 3.4, T3.el);
+        holders.forEach((h, i) => { h.updateMatrix(); mirrors[i].matrix.multiplyMatrices(MR, h.matrix); mirrors[i].visible = h.visible; });
+      },
+      dispose() {
+        T3.el = 99;
+        group.remove(title, ...mirrors); tgeo.dispose(); title.material.dispose(); tex.dispose();
+        mirrors.forEach((m) => m.material.dispose()); amap.dispose();
+      },
+    };
+  }
   const TIERS_R = [2.1, 1.65, 1.2, 0.75], TIERS = ringsMap([12, 10, 8, 6]);
   const GYRO_R = [2.2, 1.6, 1.0], GYRO = ringsMap([15, 11, 7]);
   const MANDALA_R = [0, 1.05, 2.1, 3.2], MANDALA = ringsMap([1, 6, 12, 18]);
@@ -1847,6 +1942,176 @@
   function skPose(i, o, s) {
     const a = (i / SK.n) * TAU + s.t * 0.16 + s.r, b = 0.22 * Math.sin(s.t * 0.75 + i * 1.7);
     put(o, SK.R * Math.sin(a), 0.1 + b, SK.R * Math.cos(a), 0.12 * Math.sin(s.t * 0.6 + i), a + 0.15 * Math.sin(s.t * 0.5 + i * 2), 0.1 * Math.sin(s.t * 0.7 + i * 1.3));
+  }
+  // Crescendo (in Accordion's place): CRS.n tall colour portraits standing round an oval on a black stage,
+  // CRS.a wide and CRS.b deep (half-axes; the width is fitted to the window so the oval spans the screen), evenly
+  // spaced along it and gliding slowly round. Every slat holds the same angle to the viewer: it is first turned to face
+  // the camera exactly, then turned CRS.yaw further toward the middle (the left half faces right, the right half
+  // left, easing through square-on at the centre), so all of them read as one disciplined fan whatever their place on
+  // the oval. Each is bowed along its height into a circular arc, CRS.arc radians round, its bulge toward the middle on
+  // both sides. Heights rise and fall across the screen in a bell curve, CRS.hMin at the sides to CRS.hMax in the
+  // middle, the near side of the oval lower (CRS.near) so the far side stands clear behind it. The camera sits at
+  // CRS.cam. CRS.el is the time since it opened (kept by crsStage).
+  const CRS = { n: 61, aspect: 1 / 5, hMin: 1.0, hMax: 4.4, a: 8.2, b: 3.1, arc: 0, yaw: 0.95, near: 0.5, glide: 0.006,
+    cam: [0, 6.2, 15.2], intro: 2.8, el: 99 };
+  // The middle band holds one image at a time: a single wide hero, CRS.heroW across, its neighbours standing CRS.heroSp
+  // away either side, just outside the band. Out to CRS.mid the slats are spaced that far apart (spacing CRS.open,
+  // solved in crsFit to give exactly CRS.heroSp); beyond, they close up (spacing CRS.close), easing over CRS.ease.
+  Object.assign(CRS, { mid: 1.9, ease: 0.7, open: 3, close: 0.45, heroW: 3.48, heroSp: 2.2 });
+  const crsGap = (x) => CRS.close + (CRS.open - CRS.close) * (1 - smooth(CRS.mid, CRS.mid + CRS.ease, Math.abs(x)));
+  // Slat i's width at x, for its height h: its own slim width, swelling to the full hero width as it reaches the
+  // centre. The swell spans exactly one spacing, so as one image glides out of the middle the next widens into its
+  // place and together they always fill the band, never more than one whole image in it.
+  const crsWidth = (x, h) => {
+    const wn = h * CRS.aspect, k = 1 - smooth(0, CRS.heroSp, Math.abs(x));
+    return wn + (CRS.heroW * Math.min(1, h / 2.2) - wn) * k;
+  };
+  // The oval's angle (0 at the front, toward the viewer) at each of CRS_T.length even steps, where a step is a length
+  // along the oval divided by the spacing wanted there, so the slats fall open in the middle and close at the sides.
+  const CRS_T = [];
+  const crsHalf = (aspect) => 16.1 * Math.tan((17 * PI) / 180) * aspect * 0.969;
+  function crsFit(aspect) {
+    // The oval's half-width: just under the view's half-width at its centre (camera about 16 away, 34° tall).
+    CRS.a = crsHalf(aspect);
+    const N = 1440;
+    let len;
+    // Find the middle spacing that puts the hero's neighbours exactly CRS.heroSp away (the spacing is relative, so a
+    // few rounds of adjusting it settle quickly).
+    for (let round = 0; round < 8; round++) {
+      len = [0];
+      for (let k = 1; k <= N; k++) {
+        const t0 = ((k - 1) / N) * TAU, t1 = (k / N) * TAU, x = CRS.a * Math.sin((t0 + t1) / 2);
+        len.push(len[k - 1] + Math.hypot(CRS.a * (Math.sin(t1) - Math.sin(t0)), CRS.b * (Math.cos(t1) - Math.cos(t0))) / crsGap(x));
+      }
+      CRS.open *= CRS.heroSp / ((len[N] / CRS.n) * CRS.open);
+    }
+    CRS_T.length = 0;
+    for (let j = 0, k = 0; j < 512; j++) {
+      const want = (j / 512) * len[N];
+      while (len[k + 1] < want) k++;
+      CRS_T.push(((k + (want - len[k]) / (len[k + 1] - len[k] || 1)) / N) * TAU);
+    }
+  }
+  crsFit(16 / 9);
+  // Slat i's angle round the oval now: evenly spaced by length, gliding slowly (drag moves them on). Read smoothly
+  // between the table's steps so the glide never ticks.
+  const crsTheta = (i, s) => {
+    const f = nMod(i / CRS.n + s.t * CRS.glide + s.r * 0.05, 1) * CRS_T.length, j = Math.floor(f), k = (j + 1) % CRS_T.length;
+    const t0 = CRS_T[j], t1 = k ? CRS_T[k] : TAU;
+    return t0 + (t1 - t0) * (f - j);
+  };
+  // How near the front of the oval angle th is: 1 at the front, 0 at the back.
+  const crsFront = (th) => 0.5 + 0.5 * Math.cos(th);
+  // Slat i's height now: the bell across the screen, lower on the near side, growing up out of the floor on opening,
+  // from the middle outward.
+  const crsH = (i, s) => {
+    const th = crsTheta(i, s), x = Math.abs(Math.sin(th)), g = clamp(CRS.el * 1.1 - x * 0.6);
+    const h = (CRS.hMin + (CRS.hMax - CRS.hMin) * Math.exp(-x * x * 2.3)) * (1 - (1 - CRS.near) * crsFront(th));
+    return h * (1 - Math.pow(1 - g, 4));
+  };
+  // Gallery lighting. A soft key from the upper left front, so each bow is bright where it turns to the light and falls
+  // into shade as it curves away, with a fine satin highlight down the crest of the curve. Over that, a spotlight on
+  // the middle band: the portraits there glow at full strength while those out to the sides sink toward shadow, and
+  // the near side of the oval stands a little darker than the far, so the eye goes straight to the centre and the
+  // oval reads in depth.
+  const CRS_TINT = { uniforms: {}, glsl: `float tint(vec3 p) {
+        vec3 n = normalize(vWN), vd = normalize(cameraPosition - p);
+        if (dot(n, vd) < 0.0) n = -n;
+        vec3 l = normalize(vec3(-0.55, 0.6, 0.6));
+        float d = max(dot(n, l), 0.0), sp = pow(max(dot(n, normalize(l + vd)), 0.0), 48.0);
+        float key = (0.38 + 0.78 * d + 0.5 * sp) * (0.82 + 0.18 * smoothstep(0.0, 3.0, p.y));
+        float spot = mix(1.12, 0.45, smoothstep(1.4, 7.5, abs(p.x)));
+        float near = mix(1.0, 0.68, smoothstep(-1.0, 2.8, p.z));
+        return key * spot * near;
+      }` };
+  // How brightly the spotlight falls at x across the stage: 1 in the middle band, fading toward the sides.
+  const crsSpot = (x) => 1 - smooth(1.4, 7.5, Math.abs(x));
+  // Crescendo's stage: every portrait reflected in the polished black floor and fading away below it, its reflection
+  // lit by the same spotlight; a cinematic opening, the oval sweeping round and settling as the camera eases in; and
+  // the opening clock.
+  function crsStage(group, L, faces) {
+    const holders = group.children.slice(0, L.count);
+    // Reflections: each portrait mirrored through the floor, strongest at its foot and gone halfway down.
+    const ac = document.createElement('canvas'); ac.width = 4; ac.height = 128;
+    const ag = ac.getContext('2d'), agr = ag.createLinearGradient(0, 0, 0, 128);
+    agr.addColorStop(0, '#000000'); agr.addColorStop(0.55, '#000000'); agr.addColorStop(1, '#FFFFFF');
+    ag.fillStyle = agr; ag.fillRect(0, 0, 4, 128);
+    const amap = new THREE.CanvasTexture(ac), MR = new THREE.Matrix4().makeScale(1, -1, 1);
+    const mirrors = holders.map((h, i) => {
+      const m = new THREE.Mesh(h.children[0].geometry, new THREE.MeshBasicMaterial({ map: faces[L.faceOf(i) % faces.length].tex, alphaMap: amap,
+        color: '#8A8A8A', transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide }));
+      m.matrixAutoUpdate = false; m.frustumCulled = false; m.renderOrder = -2; return m;
+    });
+    group.add(...mirrors);
+    let t0 = null;
+    return {
+      tick(s, aspect) {
+        if (t0 === null) t0 = s.t;
+        CRS.el = s.t - t0;
+        // Refit the oval whenever the window's shape changes, so it always spans the screen.
+        if (aspect && Math.abs(crsHalf(aspect) - CRS.a) > 0.01) crsFit(aspect);
+        // The opening: the oval starts turned away, lower and further off, then sweeps round and settles as the camera
+        // eases in, over CRS.intro seconds.
+        const e = 1 - Math.pow(1 - clamp(CRS.el / CRS.intro), 4);
+        group.rotation.y = 0.55 * (1 - e); group.scale.setScalar(0.78 + 0.22 * e); group.position.y = -0.7 * (1 - e);
+        holders.forEach((h, i) => {
+          h.updateMatrix(); const m = mirrors[i];
+          m.matrix.multiplyMatrices(MR, h.matrix); m.visible = h.visible;
+          m.material.color.setScalar(0.24 + 0.44 * crsSpot(h.position.x));
+        });
+      },
+      dispose() {
+        CRS.el = 99; group.rotation.set(0, 0, 0); group.scale.setScalar(1); group.position.set(0, 0, 0);
+        group.remove(...mirrors);
+        mirrors.forEach((m) => m.material.dispose()); amap.dispose();
+      },
+    };
+  }
+  // Silk Ribbon (in Honeycomb's place): one tall ribbon twisting round an upright axis, like a sculpted strip of satin,
+  // built from SRB.n photos laid edge to edge up its length, each a band SRB.dh tall. The ribbon is SRB.w wide at its
+  // waist and narrows to fine points at the top and bottom; it turns SRB.twist radians per unit of height. The twist
+  // holds still in space while the cards stream up through it, SRB.flow cards a second: each one is born from the
+  // fine point at the bottom, swells as it rises through the waist, and thins away to nothing at the top (drag runs
+  // the stream on). On opening the ribbon unfurls from a flat, slim strip into the full twist.
+  // SRB.el is the time since it opened (kept by srbStage).
+  const SRB = { n: 11, w: 5.4, dh: 1.0, gap: 0, twist: 0.56, flow: 0, lean: 0.075, el: 99 };
+  SRB.h = SRB.n * SRB.dh;
+  // Studio light on a matte surface, as in a sculpture shoot: a broad soft key from the upper left, so each turn of
+  // the ribbon swells into light and rolls away into a soft, deep shade, with no gloss or sheen (it reads as matte
+  // paper or suede, never wet or metallic); and the narrowing ends sinking a little into shadow, so the eye settles on
+  // the wide, bright waist.
+  const SRB_TINT = { uniforms: {}, glsl: `float tint(vec3 p) {
+        vec3 n = normalize(vWN), vd = normalize(cameraPosition - p);
+        if (dot(n, vd) < 0.0) n = -n;
+        vec3 l = normalize(vec3(-0.62, 0.42, 0.66));
+        float d = max(dot(n, l), 0.0);
+        float key = 0.5 + 0.62 * smoothstep(0.0, 1.0, d);
+        return key * mix(1.04, 0.84, smoothstep(1.4, 5.2, abs(p.y)));
+      }` };
+  // Silk Ribbon's stage: the ribbon set a little right of centre and leaning on a slight diagonal, like a sculpture
+  // composed on a poster; a soft shadow falling on the seamless backdrop behind it, so it stands in real space; and
+  // the opening clock.
+  function srbStage(group) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 512;
+    const g = c.getContext('2d'), rg = g.createRadialGradient(128, 256, 0, 128, 256, 128);
+    rg.addColorStop(0, 'rgba(60,48,38,1)'); rg.addColorStop(0.55, 'rgba(60,48,38,0.45)'); rg.addColorStop(1, 'rgba(60,48,38,0)');
+    g.setTransform(1, 0, 0, 2, 0, -256); g.fillStyle = rg; g.fillRect(0, 0, 256, 512);
+    const tex = new THREE.CanvasTexture(c);
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 15), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false }));
+    shadow.position.set(-1.1, 0.2, -3.4); shadow.rotation.z = SRB.lean * 1.2; shadow.renderOrder = -3; group.add(shadow);
+    let t0 = null;
+    return {
+      tick(s) {
+        if (t0 === null) t0 = s.t;
+        SRB.el = s.t - t0;
+        group.position.x = 0.55; group.rotation.z = -SRB.lean;
+        shadow.material.opacity = 0.2 * smooth(0.4, 2.4, SRB.el);
+      },
+      dispose() {
+        SRB.el = 99; group.position.x = 0; group.rotation.z = 0;
+        group.remove(shadow); shadow.geometry.dispose(); shadow.material.dispose(); tex.dispose();
+      },
+    };
   }
   const LAYOUTS = [
     // ---- Rings: the original nine --------------------------------------------------
@@ -1939,6 +2204,19 @@
         const a = tunnelA(i, s);
         tunnelPoint(TUNNEL[i].k, a, 0, s, L, _P1);
         put(o, _P1.x, _P1.y, _P1.z, 0, a);
+      } },
+    // Tunnel III: close-packed concentric rings opened into interlocking three-quarter arcs, standing on one floor
+    // and running round it, neighbours in opposite directions.
+    // Colour portraits on a softly polished white floor, all the same size, lit softly, the title at the centre; on
+    // opening each arc draws itself on like a pen stroke, then the arcs turn and lock like the dials of a lock.
+    { key: 'tunnel3', label: 'Tunnel III', cat: 'Rings', pal: 'whitepage', deck: 'tunnel3', texW: 360, count: TUNNEL3.length, w: 0.5, h: 0.78, corner: 0.02, spin: 0,
+      faceOf: (i) => (i * 5) % PC_PHOTOS.length, extra: tunnel3Stage, ownEntrance: true, tint: T3_TINT,
+      view: { fixed: { pos: [0, 6.2, 8.4], target: [0, 0.25, 0], fov: 40 } },
+      bendOf: (i) => TUNNEL3_R[TUNNEL3[i].k],
+      // Each card stands on the floor, its foot on its ring, facing out, sized by the draw-on.
+      pose(i, o, s, L) {
+        const { k } = TUNNEL3[i], R = TUNNEL3_R[k], a = tunnel3A(i, s), sc = tunnel3Size(i);
+        put(o, R * Math.sin(a), (L.h / 2) * sc, R * Math.cos(a), 0, a, 0, sc);
       } },
     { key: 'turbine', label: 'Turbine', cat: 'Kinetic', pal: 'studio', deck: 'paper', count: 30, w: 1.45, h: 1.0, bend: 0, corner: 0.03, spin: 0.2,
       view: { elev: 0.38, dist: 9, roll: 0.32 }, frame: { w: 0.82 },
@@ -2320,14 +2598,35 @@
         const yaw = i * 0.24 * (0.55 + 0.45 * Math.sin(s.t * 0.7)) + s.r;
         put(o, Math.cos(yaw) * 0.55, (i - 13) * 0.075, -Math.sin(yaw) * 0.55, -PI / 2, yaw);
       } },
-    { key: 'accordion', label: 'Accordion', cat: 'Kinetic', pal: 'linen', deck: 'base', count: 12, w: 0.9, h: 1.5, bend: 0, corner: 0.03, spin: 0.12,
-      view: { elev: 0.3, dist: 12 }, frame: { w: 0.7 },
-      // A folding screen that squeezes shut and opens like an accordion.
-      pose(i, o, s, L) {
-        const th = 0.35 + 0.55 * (0.5 + 0.5 * Math.sin(s.t * 0.9)), dx = L.w * Math.cos(th), dz = L.w * Math.sin(th);
-        const x0 = i * dx, z0 = i % 2 ? dz : 0, z1 = i % 2 ? 0 : dz;
-        put(o, x0 + dx / 2 - (12 * dx) / 2, 0, (z0 + z1) / 2, 0, Math.atan2(-(z1 - z0), dx));
-        yawAll(o, s.r * 0.4);
+    // Crescendo: colour portraits standing round an oval on a black stage, rising and falling in a bell
+    // curve across the screen, all held at one angle to the viewer toward the middle, each bowed along its height, lit
+    // so the bows read, reflected in the floor, gliding slowly round. They grow up out of the floor on opening.
+    { key: 'accordion', label: 'Crescendo', cat: 'Kinetic', pal: 'crescendo', deck: 'crescendo', texW: 512, count: CRS.n, w: 1, h: 1.5, bend: 0, corner: 0.012,
+      spin: 0, segs: [1, 32], extra: crsStage, ownEntrance: true, faceOf: (i) => (i * 4) % PC_PHOTOS.length,
+      view: { fixed: { pos: CRS.cam, target: [0, 1.1, 0], fov: 34 } },
+      tint: CRS_TINT,
+      // Each slat stands on the floor (its foot at its own origin), scaled to its height, its height laid along a
+      // circular arc whose chord is the upright line from foot to top, so it bows out to the side in the middle.
+      // In the middle band the bow straightens out, so the images there stand flat, easing back into their bow as they
+      // glide out past the band's edge.
+      deform: (i, s, L, u, v) => {
+        const x = CRS.a * Math.sin(crsTheta(i, s)), h = Math.max(0.001, crsH(i, s)), w = crsWidth(x, h);
+        const A = CRS.arc * smooth(CRS.mid, CRS.mid + CRS.ease, Math.abs(x));
+        if (A < 1e-4) return [u * w, (v + 0.5) * h, 0];
+        const R = h / (2 * Math.sin(A / 2)), ph = v * A;
+        return [u * w, h / 2 + R * Math.sin(ph), R * (Math.cos(ph) - Math.cos(A / 2))];
+      }, smoothNormals: true,
+      // Each slat shows its photo uncropped in shape: a slim upright slice of it out at the sides, opening to the whole
+      // picture (trimmed top and bottom when the hero is wider than the photo) in the middle.
+      deformUV: (i, s, L, u, v) => {
+        const x = CRS.a * Math.sin(crsTheta(i, s)), h = Math.max(0.001, crsH(i, s)), A = crsWidth(x, h) / h, C = L.w / L.h;
+        const cw = Math.min(1, A / C), ch = A > C ? C / A : 1;
+        return [0.5 + u * cw, 0.5 + v * ch];
+      },
+      // On the oval at its angle: turned to face the camera exactly, then CRS.yaw further toward the middle.
+      pose(i, o, s) {
+        const th = crsTheta(i, s), x = CRS.a * Math.sin(th), z = CRS.b * Math.cos(th);
+        put(o, x, 0, z, 0, Math.atan2(CRS.cam[0] - x, CRS.cam[2] - z) - CRS.yaw * Math.tanh(x / 1.1), 0);
       } },
     { key: 'pendulum', label: 'Pendulum', cat: 'Kinetic', pal: 'slate', deck: 'base', count: 11, w: 0.7, h: 0.95, bend: 0, corner: 0.1, spin: 0.08,
       view: { elev: 0.22, azim: 0.42, dist: 12 }, frame: { w: 0.84, h: 0.8 },
@@ -2408,7 +2707,7 @@
     wreath: ['#EEF3EA', '#1B2A18', '#3F7D3A'], halo: ['#F7F5F0', '#1A1A1A', '#C9A227', '#1A1A1A'],
     lensgrid: ['#F3F3F1', '#161616', '#161616'], ribbonflow: ['#0A0A0B', '#F2F2F2', '#F2F2F2', '#0A0A0B'],
     housecards: ['#0F3B2E', '#F1EAD6', '#C8102E'], shuffle: ['#0B3D2E', '#F5EEDC', '#D4AF37', '#0B3D2E'],
-    hand: ['#14532D', '#F7F3E8', '#B91C1C'], pinwheel: ['#FFF4F2', '#2A1210', '#FF5A36'],
+    hand: ['#14532D', '#F7F3E8', '#B91C1C'],
     gears: ['#D7DADF', '#15181D', '#3B4252'], metronome: ['#F3EFE6', '#1F1A12', '#8B2E2E'],
     bounce: ['#F0FFF4', '#0E2A16', '#22C55E', '#0E2A16'], stackpile: ['#ECEAE6', '#151515', '#2563EB'],
   };
@@ -2658,15 +2957,27 @@
         _P2.copy(ICO[i]).applyQuaternion(_q3.setFromEuler(_e.set(0.3 * Math.sin(s.t * 0.4), s.r, 0.2, 'YXZ')));
         faceTo(o, _P1.copy(_P2).multiplyScalar(1.75 + 0.15 * (0.5 + 0.5 * Math.sin(s.t * 1.3 + i))), _P2);
       } },
-    { key: 'honeycomb', label: 'Honeycomb', cat: 'Structures', pal: 'honeycomb', deck: 'base', count: 42, w: 0.82, h: 0.82, bend: 0, corner: 0.3, spin: 0.15,
-      view: { elev: 0.12, azim: 0.2, dist: 14 }, frame: { w: 0.8, h: 0.84 },
-      // An offset comb of cells that pulses outward from the middle.
-      pose(i, o, s) {
-        const c = i % 7, r = Math.floor(i / 7), x = (c - 3 + (r % 2) * 0.5) * 1.02, y = (r - 2.5) * 0.9;
-        const d = Math.hypot(x, y) + 1e-3, ph = d * 1.4 - s.t * 1.8;
-        put(o, x, y, 0.35 * Math.sin(ph), 0.16 * Math.cos(ph) * (y / d), -0.16 * Math.cos(ph) * (x / d), 0);
-        yawAll(o, Math.sin(s.r * 0.5) * 0.4);
-      } },
+    // Silk Ribbon: photos toned to one warm beige, laid seamlessly up one tall twisting ribbon so it reads as a single
+    // sheet of satin, streaming up through the twist from the point at the bottom to the point at the top, lit softly
+    // on off-white seamless paper.
+    { key: 'honeycomb', label: 'Silk Ribbon', cat: 'Structures', pal: 'ribbon', deck: 'ribbon', texW: 640, faceOf: (i) => (i * 4) % PC_PHOTOS.length, count: SRB.n, w: SRB.w, h: SRB.dh, bend: 0, corner: 0,
+      spin: 0, segs: [28, 14], extra: srbStage, ownEntrance: true, tint: SRB_TINT,
+      view: { fixed: { pos: [0.2, -0.9, 13.6], target: [0, 0.25, 0], fov: 41 } },
+      // Every point of photo i lies on the one ribbon: at its height up the ribbon, across the ribbon's width there,
+      // turned by the twist at that height. The ribbon narrows to points at both ends; on opening the twist and the
+      // width ease in from a flat, slim strip.
+      deform: (i, s, L, u, v) => {
+        const e = 1 - Math.pow(1 - clamp(SRB.el / 2.4), 3);
+        // Where card i is in the stream: its slot up the ribbon, rising and wrapping from the top back to the bottom
+        // (where the ribbon is a fine point, so the hand-over is never seen).
+        const c = nMod(i + s.t * SRB.flow + s.r * 2, SRB.n);
+        const y = (c + 0.5 + v * (1 - SRB.gap)) * SRB.dh - SRB.h / 2, t = (y + SRB.h / 2) / SRB.h;
+        // The width: a full, generous waist that falls away in a long smooth curve to the fine points at the ends.
+        const wid = SRB.w * (0.04 + 0.96 * Math.pow(Math.sin(PI * clamp(t)), 1.15)) * (0.35 + 0.65 * e);
+        const th = SRB.twist * y * e, x = u * wid;
+        return [x * Math.cos(th), y, -x * Math.sin(th)];
+      }, smoothNormals: true,
+      pose(i, o) { put(o, 0, 0, 0, 0, 0, 0); } },
     { key: 'jenga', label: 'Jenga', cat: 'Structures', pal: 'jenga', deck: 'base', count: 36, w: 2.1, h: 0.62, bend: 0, corner: 0.04, spin: 0.15,
       view: { elev: 0.45, dist: 11 }, frame: { w: 0.5, h: 0.86 },
       // A stack of crossed layers; one block at a time slides out and back.
@@ -3127,14 +3438,6 @@
         const spread = 0.06 + 0.1 * (0.5 + 0.5 * Math.sin(s.t * 0.7)), phi = (i - 6) * spread + Math.sin(s.r * 0.4) * 0.25;
         const rad = 2.2 + 0.45 * Math.exp(-((i - wrap(s.t * 0.06 + s.r * 0.05) * 13) ** 2) * 1.5);
         put(o, Math.sin(phi) * rad, -1.4 + Math.cos(phi) * rad, i * 0.025, 0, 0, -phi);
-      } },
-    { key: 'pinwheel', label: 'Pinwheel', cat: 'Kinetic', pal: 'pinwheel', deck: 'base', count: 16, w: 0.9, h: 1.6, bend: 0, corner: 0.45, spin: 0.3,
-      view: { elev: 0.05, dist: 12 }, frame: { w: 0.6, h: 0.88, drop: 0 },
-      // Pitched blades of a pinwheel, inner and outer wheels spinning opposite ways.
-      pose(i, o, s) {
-        const inner = i >= 8, a = ((i % 8) / 8) * TAU + s.r * (inner ? -1.6 : 1), R = inner ? 0.75 : 1.9;
-        put(o, R * Math.sin(a), R * Math.cos(a), inner ? 0.3 : 0, 0, 0, -a + 0.75, inner ? 0.6 : 1);
-        o.q.premultiply(_q3.setFromAxisAngle(_P2.set(Math.sin(a), Math.cos(a), 0), 0.6));
       } },
     { key: 'gears', label: 'Gears', cat: 'Kinetic', pal: 'gears', deck: 'base', count: GEAR.length, w: 0.7, h: 0.9, bend: 0, corner: 0.08, spin: 0.2,
       view: { elev: 0.03, dist: 12 }, frame: { w: 0.66, h: 0.86 },
@@ -4592,6 +4895,96 @@ transformed.y += bendAt(position.xz).x;`);
     }
   });
   const sphTurn = (s, w = 1) => _q3.setFromEuler(_e.set(0.22 * Math.sin(s.t * 0.13 * w), s.t * 0.16 * w + s.r, 0, 'YXZ'));
+  // Wave Blades (in Stadium Wave's place): WB.n slender blades stacked one above another, each a long S-shaped wave,
+  // thickest in its middle and tapering to fine points, their lengths tracing a round silhouette WB.r across.
+  // Together they show one single photo: every blade carries the part of the picture that
+  // lies where it sits, so the stack reads as one image sliced into waves. On opening the blades slide in from
+  // alternate sides. WB.el is the time since it opened (kept by wbStage).
+  // Wave Blades II turns the stack like the Earth on its axis (see wbGlobeAt), spinning WB.spin a second, its axis
+  // tipped WB.tilt like the Earth's.
+  const WB = { n: 13, r: 3.5, spin: 0.2, tilt: 0.26, el: 99 };
+  const _wb = { x: 0, y: 0, z: 0 };
+  // Point (u along the blade, v across it, both -0.5..0.5) of blade k, in the stack's own space.
+  function wbAt(k, u, v, s) {
+    const q = WB.n > 1 ? k / (WB.n - 1) : 0.5, yr = WB.r * 0.86 * (1 - 2 * q), f = 1 - (yr / WB.r) ** 2;
+    const half = WB.r * Math.sqrt(Math.max(0, f)) * 1.04 + 0.25, off = -0.14 * yr;
+    const amp = (0.16 + 0.5 * f) * 1.3, thick = 0.07 + 0.3 * Math.pow(f, 0.7), t = thick * Math.pow(Math.sin(PI * (u + 0.5)), 0.85);
+    const e = 1 - Math.pow(1 - clamp(WB.el * 1.1 - k * 0.06), 3), slide = (1 - e) * 9 * (k % 2 ? 1 : -1);
+    _wb.x = off + u * 2 * half + slide;
+    _wb.y = yr + amp * Math.sin(PI * u) + v * t;
+    _wb.z = 0;
+    return _wb;
+  }
+  // Wave Blades II: the same point when every blade is a band running all the way round a sphere at its own latitude,
+  // the sphere spinning on its axis. Each band thins to nothing toward the sphere's rim and is gone round the back,
+  // so only the near side shows, and its wave rolls across as the sphere turns (set by the point's place across the
+  // sphere, the same for every band, so neighbours always wave in parallel). On opening the bands grow out from the
+  // axis, one after another.
+  function wbGlobeAt(k, u, v, s) {
+    const q = WB.n > 1 ? k / (WB.n - 1) : 0.5, yr = WB.r * 0.86 * (1 - 2 * q), f = 1 - (yr / WB.r) ** 2;
+    const e = 1 - Math.pow(1 - clamp(WB.el * 1.1 - k * 0.06), 3);
+    // The band's radius round the axis at this latitude, its angle round the sphere, and that angle as turned now.
+    const rr = (WB.r * Math.sqrt(Math.max(0, f)) * 1.04 + 0.25) * e, ph = u * TAU, pw = ph + s.t * WB.spin + s.r;
+    const amp = (0.16 + 0.5 * f) * 1.3, thick = 0.07 + 0.3 * Math.pow(f, 0.7);
+    const t = thick * Math.pow(Math.max(0, Math.cos(pw)), 0.85);
+    // The wave rolls across with the turn; it is set by the point's place across the sphere (the same for every band,
+    // so neighbouring bands always wave in parallel and never touch).
+    const W = WB.r * 1.04 + 0.25;
+    _wb.x = rr * Math.sin(pw);
+    _wb.y = yr + amp * Math.sin((PI * _wb.x) / (2 * W) - s.t * WB.spin * 2 - s.r * 2) + v * t;
+    _wb.z = rr * Math.cos(pw);
+    // Undo the camera's perspective in height only: a band's near side sits closer to the camera (13.5 away) and would
+    // look taller, crowding it into its neighbours toward the top and bottom of the globe. Scaling its height back by
+    // its depth keeps every band exactly as far from the next as on the flat page, while the width keeps the
+    // perspective that gives the globe its depth.
+    _wb.y *= (13.5 - _wb.z) / 13.5;
+    return _wb;
+  }
+  // Pure graphic: the blades are solid matte black, like ink cut from paper. The photo lives inside them, dark, and
+  // the pointer is a torch: round where it points (uP, on the blades' plane) the black opens softly into the picture,
+  // the light falling away over WB.torch; uOn eases the torch in and out as the pointer arrives and leaves.
+  WB.torch = [0.7, 2.3];
+  const WB_TINT = { uniforms: { uP: { value: new THREE.Vector2(0, 0) }, uOn: { value: 0 } }, glsl: `uniform vec2 uP;
+      uniform float uOn;
+      float tint(vec3 p) {
+        float lit = (1.0 - smoothstep(${WB.torch[0].toFixed(2)}, ${WB.torch[1].toFixed(2)}, distance(p.xy, uP))) * uOn;
+        return mix(0.0, 1.05, lit);
+      }` };
+  // Wave Blades' stage: just the opening clock.
+  // Wave Blades II's blades on its black page: solid white, the torch opening them into the photo the same way.
+  const WB2_TINT = { uniforms: { uP: { value: new THREE.Vector2(0, 0) }, uOn: { value: 0 } }, glsl: `uniform vec2 uP;
+      uniform float uOn;
+      float tint(vec3 p) {
+        float lit = (1.0 - smoothstep(${WB.torch[0].toFixed(2)}, ${WB.torch[1].toFixed(2)}, distance(p.xy, uP))) * uOn;
+        return 10.0 + (1.0 - lit);
+      }` };
+  // Wave Blades' stage: the torch following the pointer, eased so it glides rather than jumps, and the opening clock.
+  function wbStage(group, L) {
+    const U = L.tint.uniforms, aim = new THREE.Vector2(), ray = new V3();
+    let ptr = null, t0 = null, lastT = null;
+    const onMove = (e) => { const b = stage.getBoundingClientRect(); if (!b.width) return; ptr = [((e.clientX - b.left) / b.width) * 2 - 1, 1 - ((e.clientY - b.top) / b.height) * 2]; };
+    const onLeave = () => { ptr = null; };
+    stage.addEventListener('pointermove', onMove); stage.addEventListener('pointerleave', onLeave);
+    return {
+      tick(s) {
+        if (t0 === null) t0 = s.t;
+        WB.el = s.t - t0;
+        const dt = lastT === null ? 0 : Math.min(0.1, s.t - lastT); lastT = s.t;
+        if (ptr) {
+          // Where the pointer's ray meets the blades' plane (z = 0).
+          ray.set(ptr[0], ptr[1], 0.5).unproject(camera).sub(camera.position);
+          const k = -camera.position.z / ray.z;
+          aim.set(camera.position.x + ray.x * k, camera.position.y + ray.y * k);
+          U.uP.value.lerp(aim, Math.min(1, dt * 7));
+        }
+        U.uOn.value += ((ptr ? 1 : 0) - U.uOn.value) * Math.min(1, dt * (ptr ? 4 : 2));
+      },
+      dispose() {
+        WB.el = 99; U.uOn.value = 0;
+        stage.removeEventListener('pointermove', onMove); stage.removeEventListener('pointerleave', onLeave);
+      },
+    };
+  }
   const S2 = (key, label, cat, opts, pose) => ({ key, label, cat, pal: key, deck: 'base', bend: 0, corner: 0.08, spin: 0.2, ...opts, pose });
 
   LAYOUTS.push(
@@ -4850,13 +5243,25 @@ transformed.y += bendAt(position.xz).x;`);
         const c = Math.floor(i / 2), A = (c / 6) * TAU + s.t * 0.25 + s.r, B = s.t * 1.6 + c + (i % 2) * PI;
         put(o, 2.2 * Math.sin(A) + 0.42 * Math.sin(B), 0.08 * Math.sin(s.t * 3.2 + c), 2.2 * Math.cos(A) + 0.42 * Math.cos(B), 0, B + PI / 2, 0);
       }),
-    S2('stadium', 'Stadium Wave', 'Dance', { count: STAD.length, w: 0.55, h: 0.7, view: { elev: 0.5, dist: 12 }, frame: { w: 0.8, h: 0.86 } },
-      // A Mexican wave running round the stands.
-      (i, o, s) => {
-        const { k, j, nk } = STAD[i], a = (j / nk) * TAU, R = 2.2 + k * 0.75, wv = wrap((a - s.t * 0.9 - s.r) / TAU);
-        const lift = Math.exp(-Math.pow(Math.min(wv, 1 - wv) * TAU, 2) * 3);
-        put(o, R * 1.25 * Math.sin(a), k * 0.55 + lift * 0.55, R * Math.cos(a), -0.15, a + PI, 0, 0.8 + lift * 0.2);
-      }),
+    // Wave Blades: slender S-wave blades in solid matte black stacked in a round silhouette on a white page, like the
+    // drawing; one single photo hidden inside them, revealed by the pointer like a torch.
+    S2('stadium', 'Wave Blades', 'Dance', { pal: 'whitepage', deck: 'blades', texW: 1024, count: WB.n, w: 1, h: 1, corner: 0, spin: 0,
+      segs: [48, 6], extra: wbStage, ownEntrance: true, tint: WB_TINT, faceOf: () => 0,
+      view: { fixed: { pos: [0, 0.2, 13.5], target: [0, 0, 0], fov: 38 } },
+      deform: (i, s, L, u, v) => { const P = wbAt(i, u, v, s); return [P.x, P.y, P.z]; },
+      // Every blade shows the part of the one photo that lies where it sits.
+      deformUV: (i, s, L, u, v) => { const P = wbAt(i, u, v, s); return [0.5 + (P.x - 0.0) / (2.3 * WB.r), 0.5 + P.y / (2.3 * WB.r)]; } },
+      // Flat on the page, square to the viewer.
+      (i, o) => put(o, 0, 0, 0, 0, 0, 0)),
+    // Wave Blades II: Wave Blades turning like the Earth on its axis: the blades are bands round a tilted, spinning
+    // sphere, their waves rolling across as it turns, white on a black page; the same torch reveals the hidden photo.
+    S2('stadium2', 'Wave Blades II', 'Dance', { pal: 'blackpage', deck: 'blades', texW: 1024, count: WB.n, w: 1, h: 1, corner: 0, spin: 0,
+      segs: [144, 4], extra: wbStage, ownEntrance: true, tint: WB2_TINT, faceOf: () => 0,
+      view: { fixed: { pos: [0, 0.2, 13.5], target: [0, 0, 0], fov: 38 } },
+      deform: (i, s, L, u, v) => { const P = wbGlobeAt(i, u, v, s); return [P.x, P.y, P.z]; },
+      deformUV: (i, s, L, u, v) => { const P = wbGlobeAt(i, u, v, s); return [0.5 + P.x / (2.3 * WB.r), 0.5 + P.y / (2.3 * WB.r)]; } },
+      // The sphere's axis tipped like the Earth's.
+      (i, o) => put(o, 0, 0, 0, 0, 0, -WB.tilt)),
     S2('synchro', 'Synchro Swim', 'Dance', { count: 18, w: 0.56, h: 1.0, corner: 0.3, view: { elev: 0.55, dist: 10 }, frame: { w: 0.62, h: 0.86 } },
       // Swimmers lying in a ring rise in turn like petals while the centre spins.
       (i, o, s) => {
@@ -6325,8 +6730,10 @@ transformed.y += bendAt(position.xz).x;`);
           diffuseColor.rgb = mix(diffuseColor.rgb, hTone, hChaos) + hGrain * 0.14 * hChaos;`);
       }
       if (tint) {
+        // A tint returns a factor for the card's colour (below 0 drops the point); 10 + w instead washes the colour w of
+        // the way to white.
         Object.assign(shader.uniforms, tint.uniforms);
-        shader.fragmentShader = 'varying vec3 vWN;\n' + tint.glsl + '\n' + shader.fragmentShader.replace('varying vec3 vWN;\n', '').replace('diffuseColor.rgb /= max(diffuseColor.a, 0.0001);', 'diffuseColor.rgb /= max(diffuseColor.a, 0.0001);\n\tfloat tv = tint(vWP);\n\tif (tv < 0.0) discard;\n\tdiffuseColor.rgb *= tv;');
+        shader.fragmentShader = 'varying vec3 vWN;\n' + tint.glsl + '\n' + shader.fragmentShader.replace('varying vec3 vWN;\n', '').replace('diffuseColor.rgb /= max(diffuseColor.a, 0.0001);', 'diffuseColor.rgb /= max(diffuseColor.a, 0.0001);\n\tfloat tv = tint(vWP);\n\tif (tv < 0.0) discard;\n\tif (tv >= 10.0) diffuseColor.rgb = mix(diffuseColor.rgb * 1.05, vec3(1.0), clamp(tv - 10.0, 0.0, 1.0));\n\telse diffuseColor.rgb *= tv;');
       }
       if (!dissolve) return;
       // Crumble into grain toward the ends of the row: each fine cell of the card drops out at its own point.
