@@ -1383,6 +1383,8 @@
     crescendo: PC_PHOTOS.map((id) => ({ kind: 'image', src: pexels(id) })),
     // Tunnel III's portraits: the same family of warm photos, in full colour.
     tunnel3: PC_PHOTOS.map((id) => ({ kind: 'image', src: pexels(id) })),
+    // Gravity Ball: the portraits in full colour.
+    gravity: PC_PHOTOS.map((id) => ({ kind: 'image', src: pexels(id) })),
     // Wave Blades: one single photo, shared out across every blade.
     blades: [{ kind: 'image', src: pexels(33807743) }],
     // Silk Ribbon's photos, toned by its palette to one warm satin.
@@ -4956,7 +4958,7 @@ transformed.y += bendAt(position.xz).x;`);
       uniform float uOn;
       float tint(vec3 p) {
         float lit = (1.0 - smoothstep(${WB.torch[0].toFixed(2)}, ${WB.torch[1].toFixed(2)}, distance(p.xy, uP))) * uOn;
-        return 10.0 + (1.0 - lit);
+        return 60.0 + min(1.0 - lit, 0.999);
       }` };
   // Wave Blades' stage: the torch following the pointer, eased so it glides rather than jumps, and the opening clock.
   function wbStage(group, L) {
@@ -4985,6 +4987,178 @@ transformed.y += bendAt(position.xz).x;`);
       },
     };
   }
+  // Gravity Ball (in Maze's place): a wide, level field of tiny round photo dots, G.nx by G.nz, G.sp apart, lying on a
+  // black floor like a grid of points. Under it rolls an unseen ball that lifts the field into one smooth hill, G.H
+  // high and G.sig wide (a soft bell), every dot riding the surface and tipping with its slope. The dots the ball lifts
+  // swell (up to G.big times their size on the crest) while those out on the flat shrink to G.small. The dot nearest
+  // the peak rises off the crest as a hero (G.hero times its size, floating G.float above and turning to face the
+  // viewer), so one photo always opens up full at the top, handing over smoothly as the ball moves. Out on the flat the
+  // dots are fine white points; colour blooms in only as the hill lifts them, and a warm glow breathes behind the
+  // crest. A click sends a ripple rolling out across the field (G.waves holds the live ones).
+  // Gravity Ball's ball wanders on its own and is drawn toward the pointer; Gravity Ball II's field fills the whole
+  // screen seen from above, and its hill only rises while the pointer moves (G.live), following it, and sinks back
+  // flat once the pointer rests. G.el is the time since opening, G.bx / G.bz the ball's place, G.amp the hill's
+  // current strength (all kept by the stage).
+  const GB = { nx: 60, nz: 44, sp: 0.192, H: 2.9, sig: 1.3, small: 0.55, big: 1.9, hero: 5.2, heroSig: 0.115, float: 0.3,
+    home: [0, -0.6], bound: [4.4, -3.2, 2.4], live: false, el: 99, bx: 0, bz: -0.6, vx: 0, vz: 0, amp: 1, va: 0, waves: [] };
+  const GB2 = { nx: 74, nz: 40, sp: 0.27, H: 3.0, sig: 1.44, small: 0.55, big: 2.1, hero: 4.4, heroSig: 0.15, float: 0.25,
+    home: [0, 0], bound: [9.5, -5.2, 5.2], live: true, el: 99, bx: 0, bz: 0, vx: 0, vz: 0, amp: 0, va: 0, waves: [] };
+  const GB_Z = new V3(0, 0, 1), _gbc = new V3(), _gbq = new THREE.Quaternion();
+  const GB_UP = new V3(0, 1, 0), _gbn = new V3();
+  // The field's height at (x, z). The ball moves like a weight on a spring (G.vx / G.vz its velocity): while it
+  // travels its hill leans into the motion, stretching long along its path and settling lower, with a soft hollow
+  // trailing in its wake like the dent a weight leaves in fabric; when it stops it gathers back up into a round dome.
+  function gbHeight(G, x, z) {
+    const sp = Math.hypot(G.vx, G.vz), ux = sp > 1e-4 ? G.vx / sp : 1, uz = sp > 1e-4 ? G.vz / sp : 0, m = Math.min(1, sp * 0.22);
+    const dx = x - G.bx, dz = z - G.bz, al = dx * ux + dz * uz, pe = -dx * uz + dz * ux;
+    const sa = G.sig * (1 + 0.55 * m), sq = G.sig * (1 - 0.12 * m);
+    const H = G.H * G.amp * (1 - Math.pow(1 - clamp(G.el / 2.2), 3)) * (1 - 0.22 * m);
+    let h = H * Math.exp(-((al * al) / (sa * sa) + (pe * pe) / (sq * sq)) / 2);
+    const wa = al + G.sig * 1.5;
+    h -= H * 0.28 * m * Math.exp(-((wa * wa) + pe * pe) / (2 * G.sig * G.sig * 0.55));
+    // Click ripples: a ring rolling outward from where it struck, a few waves deep, fading as it spreads.
+    let rip = 0;
+    for (const w of G.waves) {
+      const age = G.el - w.t, d = Math.hypot(x - w.x, z - w.z), front = d - age * 3.2;
+      if (front > 0.6 || front < -3.2) continue;
+      rip += 0.32 * Math.exp(-age * 0.9) * Math.exp(-front * front * 1.4) * Math.sin(front * 5.5);
+    }
+    return h + rip;
+  }
+  // The field's height at (x, z) and its slope there.
+  function gbHill(G, x, z) {
+    const h = gbHeight(G, x, z), e = 0.06;
+    return [h, (gbHeight(G, x + e, z) - h) / e, (gbHeight(G, x, z + e) - h) / e];
+  }
+  // Light on the field: out on the flat the dots are fine white points, dim (and, seen across the floor, fading into
+  // the far rows); as the hill lifts them the photos' colour blooms in and they brighten to full on the crest.
+  // `level` sets the field's overall strength (Gravity Ball II's dots sit back at 70%).
+  const gbTint = (farFade, level = 1) => ({ uniforms: {}, glsl: `float tint(vec3 p) {
+        vec3 n = normalize(vWN), vd = normalize(cameraPosition - p);
+        if (dot(n, vd) < 0.0) n = -n;
+        float sp = pow(max(dot(n, normalize(normalize(vec3(-0.3, 0.8, 0.5)) + vd)), 0.0), 18.0);
+        float crest = smoothstep(0.05, 2.2, p.y);
+        float far = ${farFade ? 'smoothstep(-4.6, 1.0, p.z)' : '1.0'};
+        float bright = clamp((0.2 + 0.95 * crest + 0.3 * sp * crest) * (0.32 + 0.68 * far) * ${level.toFixed(2)}, 0.0, 1.9);
+        float wash = 1.0 - smoothstep(0.12, 1.1, p.y);
+        return 10.0 + floor(bright * 50.0) + min(wash, 0.999);
+      }` });
+  const GB_TINT = gbTint(true), GB2_TINT = gbTint(false, 0.7);
+  // A Gravity Ball stage for field G: the glow behind the crest; the ball's wandering (Gravity Ball) or its life only
+  // while the pointer moves (Gravity Ball II), following the pointer either way; ripples sent out by clicks; and the
+  // opening clock.
+  const gbStage = (G) => function (group) {
+    const ray = new V3();
+    const c = document.createElement('canvas'); c.width = c.height = 256;
+    const g = c.getContext('2d'), rg = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+    rg.addColorStop(0, 'rgba(255,214,160,0.9)'); rg.addColorStop(0.35, 'rgba(255,170,90,0.35)'); rg.addColorStop(1, 'rgba(255,140,60,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, 256, 256);
+    const tex = new THREE.CanvasTexture(c);
+    const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 4.6), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0,
+      depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.renderOrder = -2; group.add(glow);
+    let ptr = null, t0 = null, lastT = null, aim = null, moved = -99;
+    // Where the pointer's ray (screen point q) meets the floor (y = 0), kept within the field.
+    const floorAt = (q) => {
+      ray.set(q[0], q[1], 0.5).unproject(camera).sub(camera.position);
+      if (ray.y >= -1e-3) return null;
+      const k = -camera.position.y / ray.y, [bx, bz0, bz1] = G.bound;
+      return [clamp(camera.position.x + ray.x * k, -bx, bx), clamp(camera.position.z + ray.z * k, bz0, bz1)];
+    };
+    const toNdc = (e) => { const b = stage.getBoundingClientRect(); return b.width ? [((e.clientX - b.left) / b.width) * 2 - 1, 1 - ((e.clientY - b.top) / b.height) * 2] : null; };
+    const onMove = (e) => { ptr = toNdc(e) || ptr; moved = G.el; };
+    const onLeave = () => { ptr = null; };
+    const onDown = (e) => {
+      const q = toNdc(e), at = q && floorAt(q);
+      if (at) { G.waves.push({ x: at[0], z: at[1], t: G.el }); if (G.waves.length > 4) G.waves.shift(); }
+    };
+    stage.addEventListener('pointermove', onMove); stage.addEventListener('pointerleave', onLeave); stage.addEventListener('pointerdown', onDown);
+    return {
+      tick(s) {
+        if (t0 === null) t0 = s.t;
+        G.el = s.t - t0;
+        G.waves = G.waves.filter((w) => G.el - w.t < 4);
+        const dt = lastT === null ? 0 : Math.min(0.1, s.t - lastT); lastT = s.t;
+        let [tx, tz] = G.home;
+        if (!G.live) { tx = 1.8 * Math.sin(s.t * 0.21 + s.r); tz = G.home[1] + 0.8 * Math.sin(s.t * 0.29 + 1.1); }
+        if (ptr) { aim = floorAt(ptr) || aim; if (aim) { tx = aim[0]; tz = aim[1]; } }
+        else if (G.live && aim) { tx = aim[0]; tz = aim[1]; }
+        // Gravity Ball II: the hill rises while the pointer is moving, with a soft bounce as it fills, and sinks flat a
+        // moment after the pointer rests.
+        if (G.live) {
+          const want = ptr && G.el - moved < 1.1 ? 1 : 0, up = want > G.amp;
+          G.va += ((want - G.amp) * (up ? 30 : 9) - G.va * (up ? 6.5 : 6)) * dt;
+          G.amp = Math.max(0, G.amp + G.va * dt);
+          // When the hill is gone, let it jump straight to the next place the pointer wakes it.
+          if (G.amp < 0.02 && ptr && aim) { G.bx = aim[0]; G.bz = aim[1]; G.vx = G.vz = 0; }
+        }
+        // The ball follows its target like a weight on a spring: it accelerates after the pointer, glides, and
+        // settles with the faintest overshoot.
+        const kk = ptr ? 26 : 6, cc = 2 * Math.sqrt(kk) * 0.82;
+        G.vx += ((tx - G.bx) * kk - G.vx * cc) * dt; G.vz += ((tz - G.bz) * kk - G.vz * cc) * dt;
+        G.bx += G.vx * dt; G.bz += G.vz * dt;
+        glow.position.set(G.bx, G.sink ? -0.4 * G.amp : G.H * G.amp * 0.62, G.bz - (G.sink ? 0 : 0.35)); glow.quaternion.copy(camera.quaternion);
+        glow.material.opacity = (0.5 + 0.08 * Math.sin(s.t * 1.3)) * smooth(0.6, 2.4, G.el) * G.amp;
+      },
+      dispose() {
+        G.el = 99; [G.bx, G.bz] = G.home; G.vx = G.vz = G.va = 0; G.amp = G.live ? 0 : 1; G.waves = [];
+        stage.removeEventListener('pointermove', onMove); stage.removeEventListener('pointerleave', onLeave); stage.removeEventListener('pointerdown', onDown);
+        group.remove(glow); glow.geometry.dispose(); glow.material.dispose(); tex.dispose();
+      },
+    };
+  };
+  // A Gravity Ball dot's pose: at its place in the grid, at the hill's height there, tipped to its slope, sized by
+  // how high it is lifted; the hero rises off the crest, grows and turns to the viewer.
+  // Gravity Ball II's pointer is a mass that bends the field like a black hole bends light. Round it the dots are
+  // drawn inward (GB2.pull), swept into a slow swirl (GB2.swirl radians at the heart, easing out over GB2.reach),
+  // and sink into a funnel (GB2.sink deep), the ones at its throat shrinking away into the dark. Where the bent field
+  // crowds together round the rim the dots swell into a bright ring of colour photos, like the glowing disc round a
+  // black hole. The swirl keeps turning slowly while the well is open; when the pointer rests, the well closes and the
+  // field springs back to its calm grid.
+  Object.assign(GB2, { pull: 0.62, swirl: 2.1, reach: 1.9, sink: 1.7, ring: 1.15, ringW: 0.5 });
+  function gbWell(G, x, z, s, out) {
+    const dx = x - G.bx, dz = z - G.bz, d = Math.hypot(dx, dz) + 1e-6, a = clamp(G.amp, 0, 1.4);
+    const k = 1 - G.pull * a * Math.exp(-(d * d) / (2 * G.reach * G.reach)), dn = d * k;
+    const th = a * G.swirl * Math.exp(-d / G.reach) + s.t * 0.35 * a * Math.exp(-d / G.reach);
+    const c = Math.cos(th), sn = Math.sin(th);
+    out[0] = G.bx + (dx * c - dz * sn) * k; out[1] = G.bz + (dx * sn + dz * c) * k;
+    out[2] = -G.sink * a * Math.exp(-(dn * dn) / (2 * 0.85 * 0.85)); out[3] = dn;
+    return out;
+  }
+  const _gw = [0, 0, 0, 0], _gw2 = [0, 0, 0, 0];
+  // Light for the well: calm, dim white points on the flat; colour and brightness bloom in as the field sinks toward
+  // the throat, strongest on the rim, the throat itself falling into black.
+  const GB2_WELL_TINT = { uniforms: {}, glsl: `float tint(vec3 p) {
+        float dep = -p.y;
+        float bloom = smoothstep(0.05, 0.75, dep);
+        float throat = 1.0 - smoothstep(1.1, 1.6, dep);
+        float bright = clamp((0.2 + 1.0 * bloom) * throat * 0.7, 0.0, 1.9);
+        return 10.0 + floor(bright * 50.0) + min(1.0 - bloom, 0.999);
+      }` };
+  const gbWellPose = (G) => (i, o, s) => {
+    const c = i % G.nx, r = Math.floor(i / G.nx);
+    const x = (c - (G.nx - 1) / 2) * G.sp, z = (r - (G.nz - 1) / 2) * G.sp;
+    gbWell(G, x, z, s, _gw);
+    // The slope of the funnel here, for each dot to tip with it.
+    gbWell(G, x + 0.05, z, s, _gw2); const hx = (_gw2[2] - _gw[2]) / Math.max(1e-3, Math.hypot(_gw2[0] - _gw[0], _gw2[1] - _gw[1]));
+    gbWell(G, x, z + 0.05, s, _gw2); const hz = (_gw2[2] - _gw[2]) / Math.max(1e-3, Math.hypot(_gw2[0] - _gw[0], _gw2[1] - _gw[1]));
+    const a = clamp(G.amp, 0, 1.4), ring = a * Math.exp(-((_gw[3] - G.ring) ** 2) / (2 * G.ringW * G.ringW));
+    const sc = G.small * (1 + 4.04 * ring) * (0.15 + 0.85 * smooth(0.12, 0.65, _gw[3] / Math.max(0.2, a)));
+    put(o, _gw[0], _gw[2], _gw[1], -PI / 2, 0, 0, sc);
+    o.q.premultiply(_q3.setFromUnitVectors(GB_UP, _gbn.set(-hx, 1, -hz).normalize()));
+  };
+  const gbPose = (G) => (i, o) => {
+    const c = i % G.nx, r = Math.floor(i / G.nx);
+    const x = (c - (G.nx - 1) / 2) * G.sp, z = (r - (G.nz - 1) / 2) * G.sp, [h, hx, hz] = gbHill(G, x, z);
+    const lift = Math.pow(clamp(h / G.H), 0.8);
+    // The hero waits for the ball to slow before it lifts, so it never flickers while the hill is on the move.
+    const hd = Math.hypot(x - G.bx, z - G.bz), still = Math.exp(-Math.hypot(G.vx, G.vz) * 0.9);
+    const hero = Math.exp(-(hd * hd) / (2 * G.heroSig * G.heroSig)) * smooth(1.6, 2.8, G.el) * clamp(G.amp) * still;
+    const sc = (G.small + (G.big - G.small) * lift) * (1 + (G.hero - 1) * hero);
+    put(o, x, h + G.float * hero, z, -PI / 2, 0, 0, sc);
+    o.q.premultiply(_q3.setFromUnitVectors(GB_UP, _gbn.set(-hx, 1, -hz).normalize()));
+    if (hero > 0.002) o.q.slerp(_gbq.setFromUnitVectors(GB_Z, _gbc.copy(camera.position).sub(_gbn.set(x, h, z)).normalize()), hero);
+  };
   const S2 = (key, label, cat, opts, pose) => ({ key, label, cat, pal: key, deck: 'base', bend: 0, corner: 0.08, spin: 0.2, ...opts, pose });
 
   LAYOUTS.push(
@@ -5127,13 +5301,6 @@ transformed.y += bendAt(position.xz).x;`);
         faceTo(o, _P1.copy(_P2).multiplyScalar(2.0 + open * 0.6).add(_P0.set(0, -0.8, 0)), _P2, 0.95);
         o.q.multiply(_q2.setFromAxisAngle(AX, -open));
       }),
-    S2('skyline', 'Skyline', 'Architecture', { count: SKYMAP.length, w: 0.72, h: 0.52, corner: 0.03, view: { elev: 0.08, dist: 13 }, frame: { w: 0.8, h: 0.86 } },
-      // A city of stacked blocks, windows flickering, turning to show its depth.
-      (i, o, s) => {
-        const [c, k] = SKYMAP[i];
-        put(o, (c - 4) * 0.78, -2.0 + k * 0.56, (hash(c, 1) - 0.5) * 1.6, 0, 0, 0, 0.94 + 0.06 * Math.sin(s.t * 1.3 + i * 2.1));
-        yawAll(o, Math.sin(s.r * 0.5) * 0.6);
-      }),
     S2('starburst', 'Starburst', 'Architecture', { deck: 'phone', texW: 200, count: SB.n, w: 0.36, h: 0.36, corner: 0.02, spin: 0, extra: sbRays, ownEntrance: true,
       faceOf: (i) => (i * 7) % PC_PHOTOS.length, view: { fixed: { pos: [0, 0, 14], target: [0, 0, 0], fov: 40 } } },
       // A still burst of rays from the bottom centre, a small photo at the tip of each, the rays growing out as it opens.
@@ -5161,13 +5328,18 @@ transformed.y += bendAt(position.xz).x;`);
         turnAll(o, ESCHER_Q[Math.floor(i / 6)]);
         turnAll(o, _q3.setFromEuler(_e.set(0.5 + 0.2 * Math.sin(s.t * 0.3), s.r + s.t * 0.15, 0.3, 'YXZ')));
       }),
-    S2('maze', 'Maze', 'Architecture', { count: MAZE.length, w: 0.95, h: 0.55, corner: 0.04, view: { elev: 0.95, dist: 11 }, frame: { w: 0.62, h: 0.86 } },
-      // The walls of a maze rising and sinking in a wave from the centre.
-      (i, o, s) => {
-        const [x, z, vert] = MAZE[i], d = Math.hypot(x, z);
-        put(o, x, -0.3 + 0.6 * (0.5 + 0.5 * Math.sin(s.t * 1.2 - d * 0.9)), z, 0, vert ? PI / 2 : 0, 0);
-        yawAll(o, s.r * 0.4);
-      }),
+    // Gravity Ball: a field of fine white dots on a black floor, lifted into one glowing hill of colour photos by an
+    // unseen ball that wanders under it and follows the pointer; one hero photo floats at the peak; clicks send ripples.
+    S2('maze', 'Gravity Ball', 'Architecture', { pal: 'blackpage', deck: 'gravity', texW: 48, count: GB.nx * GB.nz, w: 0.092, h: 0.092, corner: 0.5,
+      spin: 0, extra: gbStage(GB), ownEntrance: true, tint: GB_TINT, faceOf: (i) => (i * 7) % PC_PHOTOS.length, smoothNormals: false,
+      view: { fixed: { pos: [0, 3.5, 6.9], target: [0, 0.85, -0.9], fov: 46 } } },
+      gbPose(GB)),
+    // Gravity Ball II: the dot field filling the whole screen, seen from above; while the pointer moves it becomes a
+    // mass that bends the field into a swirling gravity well ringed with colour photos, closing when it rests.
+    S2('maze2', 'Gravity Ball II', 'Architecture', { pal: 'blackpage', deck: 'gravity', texW: 48, count: GB2.nx * GB2.nz, w: 0.07, h: 0.07, corner: 0.5,
+      spin: 0, extra: gbStage(GB2), ownEntrance: true, tint: GB2_WELL_TINT, faceOf: (i) => (i * 7) % PC_PHOTOS.length, smoothNormals: false,
+      view: { fixed: { pos: [0, 10.2, 2.4], target: [0, 0, 0.15], fov: 50 } } },
+      gbWellPose(GB2)),
 
     // ---- Illusions -----------------------------------------------------------------------
     S2('droste', 'Droste', 'Illusions', { count: 14, w: 1.0, h: 0.75, corner: 0.04, view: { elev: 0.02, dist: 14 }, frame: { w: 0.7, h: 0.86, drop: 0 } },
@@ -6730,10 +6902,10 @@ transformed.y += bendAt(position.xz).x;`);
           diffuseColor.rgb = mix(diffuseColor.rgb, hTone, hChaos) + hGrain * 0.14 * hChaos;`);
       }
       if (tint) {
-        // A tint returns a factor for the card's colour (below 0 drops the point); 10 + w instead washes the colour w of
-        // the way to white.
+        // A tint returns a factor for the card's colour (below 0 drops the point). 10 + q instead washes the colour
+        // fract(q) of the way to white and then scales it by floor(q) / 50 (so 60 + w is a plain wash at full strength).
         Object.assign(shader.uniforms, tint.uniforms);
-        shader.fragmentShader = 'varying vec3 vWN;\n' + tint.glsl + '\n' + shader.fragmentShader.replace('varying vec3 vWN;\n', '').replace('diffuseColor.rgb /= max(diffuseColor.a, 0.0001);', 'diffuseColor.rgb /= max(diffuseColor.a, 0.0001);\n\tfloat tv = tint(vWP);\n\tif (tv < 0.0) discard;\n\tif (tv >= 10.0) diffuseColor.rgb = mix(diffuseColor.rgb * 1.05, vec3(1.0), clamp(tv - 10.0, 0.0, 1.0));\n\telse diffuseColor.rgb *= tv;');
+        shader.fragmentShader = 'varying vec3 vWN;\n' + tint.glsl + '\n' + shader.fragmentShader.replace('varying vec3 vWN;\n', '').replace('diffuseColor.rgb /= max(diffuseColor.a, 0.0001);', 'diffuseColor.rgb /= max(diffuseColor.a, 0.0001);\n\tfloat tv = tint(vWP);\n\tif (tv < 0.0) discard;\n\tif (tv >= 10.0) diffuseColor.rgb = mix(diffuseColor.rgb * 1.05, vec3(1.0), fract(tv - 10.0)) * (floor(tv - 10.0) / 50.0);\n\telse diffuseColor.rgb *= tv;');
       }
       if (!dissolve) return;
       // Crumble into grain toward the ends of the row: each fine cell of the card drops out at its own point.
