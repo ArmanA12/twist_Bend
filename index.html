@@ -1918,6 +1918,120 @@
     else { const b = PI + (d - Ls) / R; _cv2.nx = Math.sin(b); _cv2.ny = Math.cos(b); _cv2.x = -Ls / 2 + R * _cv2.nx; _cv2.y = R * _cv2.ny; }
     return _cv2;
   }
+  // Conveyor III: a band of photos bent into an infinity sign, a Moebius strip. It stands on its edge on a grey floor,
+  // its centre line a lemniscate lying flat (CV3.a half its length, CV3.d how deep and round its lobes swell), so each
+  // lobe reads as a low ring seen from a little above: its front wall's outside, and through the opening the floor and
+  // the inside of its back wall. On each of its two passes through the middle the band turns over by half, the same
+  // way both times, one pass crossing flat above the other. The band is a thick card (CV3.t through) cut into square photo tiles
+  // with a fine gap between them, a photo on both faces and clean white edges; like Conveyor II the photos run along it
+  // as one printed ribbon while the band itself holds still. It rests on the floor in a soft contact shadow, with a
+  // faint reflection below. CV3.w is half the band's height.
+  const CV3 = { a: 4.469, d: 1.323, w: 0.78, t: 0.055, N: 720, M: 10, tw: 1.45, gap: 0.03 };
+  function cv3Run(group, L, faces) {
+    const made = [], texs = [], { a, d, w, M } = CV3, ht = CV3.t / 2;
+    const C = (u, out) => { const q = 1 + Math.sin(u) ** 2; return out.set((a * Math.cos(u)) / q, 0, (a * d * Math.sin(u) * Math.cos(u)) / q); };
+    const p = new V3(), p1 = new V3(), p0 = new V3(), T = new V3(), side = new V3(), up = new V3(0, 1, 0), wv = new V3(), nv = new V3();
+    // The twists at u: the band turns over by half on each pass through the middle, the same way both times. On the
+    // first pass it lifts so its flattened middle clears the other pass above; on the second it sinks a little so it
+    // passes flat beneath. Returns its angle and its lift.
+    const twistAt = (u) => {
+      const ease = (c) => { const k = clamp((u - c) / CV3.tw * 0.5 + 0.5); return k * k * (3 - 2 * k); };
+      const e1 = ease(PI / 2), e2 = ease(1.5 * PI);
+      return [PI * (e1 + e2), Math.sin(PI * e1) * w * 0.55 - Math.sin(PI * e2) * w * 0.4];
+    };
+    const frame = (u) => { C(u, p); C(u + 1e-3, p1); C(u - 1e-3, p0); T.subVectors(p1, p0).normalize(); side.crossVectors(up, T).normalize(); };
+    // The band's length, to cut it into tiles about as long as it is tall.
+    let len = 0; C(0, p0);
+    for (let i = 1; i <= 2000; i++) { C((i / 2000) * TAU, p1); len += p1.distanceTo(p0); p0.copy(p1); }
+    const K = Math.max(6, Math.round(len / (2 * w))), NS = Math.ceil(CV3.N / K);
+    // A grid of (NS + 1) by (cols + 1) points with its triangles and (optionally) its photo coordinates.
+    const grid = (cols, uvs) => {
+      const n = (NS + 1) * (cols + 1), idx = [], g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      if (uvs) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2));
+      for (let i = 0; i < NS; i++) for (let j = 0; j < cols; j++) { const q = i * (cols + 1) + j, r = q + cols + 1; idx.push(q, r, q + 1, q + 1, r, r + 1); }
+      g.setIndex(idx); return g;
+    };
+    // Lay one tile along the band from u0 to u1: its two photo faces, half the card's thickness out to either side,
+    // and its white edges joining them along the top and bottom (set every frame as the ribbon runs).
+    const placeTile = (tl, u0, u1) => {
+      const fa = tl.front.attributes.position.array, ba = tl.back.attributes.position.array, ta = tl.top.attributes.position.array, la = tl.low.attributes.position.array;
+      for (let i = 0; i <= NS; i++) {
+        const u = u0 + (u1 - u0) * (i / NS); frame(u);
+        const [th, lift] = twistAt(wrap(u / TAU) * TAU);
+        wv.copy(up).multiplyScalar(Math.cos(th)).addScaledVector(side, Math.sin(th));
+        nv.crossVectors(T, wv);
+        for (let j = 0; j <= M; j++) {
+          const v = (j / M - 0.5) * 2 * w, q = (i * (M + 1) + j) * 3, x = p.x + wv.x * v, y = w + lift + wv.y * v, z = p.z + wv.z * v;
+          fa[q] = x + nv.x * ht; fa[q + 1] = y + nv.y * ht; fa[q + 2] = z + nv.z * ht;
+          ba[q] = x - nv.x * ht; ba[q + 1] = y - nv.y * ht; ba[q + 2] = z - nv.z * ht;
+        }
+        // The edges: a strip across the card's thickness along its top and along its bottom.
+        [[ta, w], [la, -w]].forEach(([ea, v]) => [1, -1].forEach((sg, j) => {
+          const q = (i * 2 + j) * 3;
+          ea[q] = p.x + wv.x * v + nv.x * ht * sg; ea[q + 1] = w + lift + wv.y * v + nv.y * ht * sg; ea[q + 2] = p.z + wv.z * v + nv.z * ht * sg;
+        }));
+      }
+      [tl.front, tl.back, tl.top, tl.low].forEach((g) => { g.attributes.position.needsUpdate = true; g.computeVertexNormals(); });
+      // Keep the photo upright: once the tile's middle has turned over (between the two twists) its photo is turned
+      // about, so it always reads the right way up and left to right where the camera sees it. The swap happens as
+      // the tile lies flat crossing the middle.
+      const um = wrap((u0 + u1) / 2 / TAU) * TAU, th = twistAt(um)[0], over = th > PI / 2 && th < 1.5 * PI;
+      if (tl.over !== over) {
+        tl.over = over;
+        [[tl.front, false], [tl.back, true]].forEach(([g, mirror]) => {
+          const uv = g.attributes.uv.array;
+          for (let i = 0; i <= NS; i++) for (let j = 0; j <= M; j++) {
+            let x = mirror ? 1 - i / NS : i / NS, y = j / M;
+            if (over) { x = 1 - x; y = 1 - y; }
+            uv[(i * (M + 1) + j) * 2] = x; uv[(i * (M + 1) + j) * 2 + 1] = y;
+          }
+          g.attributes.uv.needsUpdate = true;
+        });
+      }
+    };
+    // The photos with a soft satin print finish; the edges matte white card.
+    const mats = faces.map((f) => new THREE.MeshStandardMaterial({ map: f.tex, roughness: 0.5, metalness: 0, side: THREE.DoubleSide }));
+    const edgeMat = new THREE.MeshStandardMaterial({ color: '#F4F4F2', roughness: 0.8, metalness: 0, side: THREE.DoubleSide });
+    // The polished floor's reflection: the photos themselves, mirrored and faint.
+    const ghostMats = faces.map((f) => new THREE.MeshBasicMaterial({ map: f.tex, transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false }));
+    const root = new THREE.Group(), tiles = [];
+    for (let k = 0; k < K; k++) {
+      const tl = { front: grid(M, true), back: grid(M, true), top: grid(1, false), low: grid(1, false), over: null }, mat = mats[k % mats.length];
+      [[tl.front, mat], [tl.back, mat], [tl.top, edgeMat], [tl.low, edgeMat]].forEach(([g, m], q) => {
+        const mesh = new THREE.Mesh(g, m); mesh.frustumCulled = false; root.add(mesh);
+        if (q < 2) { const ghost = new THREE.Mesh(g, ghostMats[k % ghostMats.length]); ghost.scale.y = -1; ghost.frustumCulled = false; ghost.renderOrder = -2; root.add(ghost); }
+      });
+      tiles.push(tl);
+    }
+    const du = TAU / K, gu = du * CV3.gap / 2;
+    const lay = (off) => tiles.forEach((tl, k) => placeTile(tl, k * du + gu + off, (k + 1) * du - gu + off));
+    lay(0);
+    // The soft contact shadow on the floor: the band's footprint drawn as a broad blurred stroke, darkest where it
+    // touches, lying just above the floor.
+    const S = 4 * a, sc = document.createElement('canvas'); sc.width = 1024; sc.height = Math.round(1024 * (2 * a * d * 0.42 + 1.6) / S);
+    const sg = sc.getContext('2d'), toC = (x, z) => [((x + S / 2) / S) * sc.width, sc.height / 2 + (z / S) * sc.width];
+    sg.filter = 'blur(14px)'; sg.strokeStyle = 'rgba(0,0,0,0.6)'; sg.lineWidth = 34; sg.lineJoin = 'round'; sg.beginPath();
+    for (let i = 0; i <= 400; i++) { C((i / 400) * TAU, p); const [cx, cy] = toC(p.x, p.z); if (i) sg.lineTo(cx, cy); else sg.moveTo(cx, cy); }
+    sg.closePath(); sg.stroke();
+    sg.filter = 'blur(4px)'; sg.strokeStyle = 'rgba(0,0,0,0.7)'; sg.lineWidth = 9; sg.stroke();
+    const stex = new THREE.CanvasTexture(sc); texs.push(stex);
+    const shGeo = new THREE.PlaneGeometry(S, (S * sc.height) / sc.width), shMat = new THREE.MeshBasicMaterial({ map: stex, transparent: true, depthWrite: false });
+    const shadow = new THREE.Mesh(shGeo, shMat); shadow.rotation.x = -PI / 2; shadow.position.y = 0.004; shadow.renderOrder = 0; root.add(shadow);
+    root.position.y = -0.95; made.push(root);
+    // Soft studio light from above and in front, a cool rim from the right; the insides of the rings fall into shade.
+    const amb = new THREE.HemisphereLight(0xffffff, 0x3a3a40, 0.78), key = new THREE.DirectionalLight(0xfff6ea, 0.75), rim = new THREE.DirectionalLight(0xdfe8ff, 0.45);
+    key.position.set(-3, 6, 6); rim.position.set(6, 4, -5); made.push(amb, key, rim);
+    group.add(...made);
+    return {
+      // The photos run along the band (slowly on their own, and with the drag), the band holding still.
+      tick(s) { lay(wrap(s.t * 0.012 + s.r * 0.1) * TAU); },
+      dispose() {
+        group.remove(...made); tiles.forEach((tl) => [tl.front, tl.back, tl.top, tl.low].forEach((g) => g.dispose())); shGeo.dispose();
+        [...mats, ...ghostMats, edgeMat, shMat].forEach((m) => m.dispose()); texs.forEach((t) => t.dispose());
+      },
+    };
+  }
   // Orbit V's soft studio light from the upper front; squares at the back of the carousel fall a little into shade.
   // Shared with Orbit V II.
   const SK_TINT = { uniforms: {}, glsl: `float tint(vec3 p) {
@@ -3040,6 +3154,11 @@
       // CV2.tilt so the loop rises on a diagonal and leans toward the viewer, giving the composition its direction.
       // Shifted a touch left: the lean brings the right end nearer (so larger), and this keeps equal margins.
       pose(i, o) { put(o, -0.38, 0, 0, CV2.tilt[0], CV2.tilt[1], CV2.tilt[2]); } },
+    // Conveyor III: a Moebius strip of photos bent into an infinity sign, standing on a grey floor.
+    { key: 'conveyor3', label: 'Conveyor III', cat: 'Flows', pal: 'tbPaper', deck: 'gravity', texW: 512, count: 1, w: 1, h: 1, bend: 0, corner: 0, spin: 0.15,
+      extra: cv3Run, view: { fixed: { pos: [0, 4.6, 8.6], target: [0, -0.25, 0], fov: 38 } },
+      // The band is drawn by cv3Run from the deck's photos; the one card this shade needs stays hidden.
+      pose(i, o) { put(o, 0, 0, -50, 0, 0, 0, 0); } },
     { key: 'fountain', label: 'Fountain', cat: 'Flows', pal: 'drift', deck: 'drift', texW: 380, count: 115, w: 0.78, h: 1.0, bend: 0, corner: 0.05, spin: 0.2,
       view: { fixed: { pos: [0, 1.2, 17], target: [0, 1.6, 0], fov: 45 } }, extra: fountainGlow, segs: [12, 1],
       // Each card bends in a soft curve across its width, the bend flexing back and forth as it flies like thin card in the air.
@@ -4883,6 +5002,51 @@ transformed.y += bendAt(position.xz).x;`);
       },
     };
   }
+  // Parabola: a slider of photos running along an upturned parabola, an arch: its vertex high in the middle of the
+  // screen and its arms falling toward the bottom corners. The photos glide along the curve one after another, each standing upright; the
+  // one passing the vertex grows to lead. PB.k is the curve's steepness, PB.y0 the height of its vertex, PB.gap the
+  // space between photos along it.
+  const PB = { k: 0.081, y0: 1.55, n: 18, w: 1.5, h: 2.0, gap: 0.3 };
+  // Distance along the curve from the vertex (sampled once) to the x it reaches, so the photos keep even spacing.
+  PB.tab = (() => { const t = [[0, 0]]; let d = 0; for (let x = 0; x < 20; x += 0.01) { d += Math.hypot(0.01, PB.k * ((x + 0.01) ** 2 - x * x)); t.push([d, x + 0.01]); } return t; })();
+  function pbX(d) {
+    const a = Math.abs(d), t = PB.tab; let lo = 0, hi = t.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (t[m][0] < a) lo = m; else hi = m; }
+    const u = (a - t[lo][0]) / ((t[hi][0] - t[lo][0]) || 1);
+    return Math.sign(d) * (t[lo][1] + (t[hi][1] - t[lo][1]) * u);
+  }
+  // The glide breathes rather than running like a belt: it surges gently, eases almost to rest and surges again.
+  const pbFlow = (t) => 0.0085 * t + 0.0075 * Math.sin(t * 0.42);
+  function pbPose(i, o, s) {
+    const per = PB.w + PB.gap, L = PB.n * per, d = (wrap(i / PB.n + pbFlow(s.t) + s.r * 0.03) - 0.5) * L, x = pbX(d);
+    // The photo nearing the peak rises out of the line, comes forward and grows; every photo floats a little on its
+    // own slow swell, out of step with its neighbours.
+    const lead = Math.exp(-(x * x) / 6), e = lead * lead * (3 - 2 * lead), bob = 0.07 * Math.sin(s.t * 0.8 + i * 1.3);
+    put(o, x, PB.y0 - PB.k * x * x + e * 0.32 + bob * (1 - 0.6 * e), e * 0.9, 0, 0, 0, 1 + 0.34 * e);
+  }
+  // Trajectories: a fan of projectile paths, every one launched from the same point at the bottom middle at the same
+  // speed but its own angle (PJ.deg, mirrored left and right), so they rise and fall as nested parabolas of every
+  // height and reach. Each path is drawn only in photos thrown along it with real projectile timing: quick off the
+  // launch, slowing as they climb to hang near the apex, then quickening as they fall. Every photo grows as it rises,
+  // largest at its apex, and shrinks as it comes down; they fade in just above the launch point and out as they land,
+  // so the meeting point stays clear. PJ.H is the height of a vertical shot, PJ.sx how much the paths are drawn in
+  // across, PJ.size a photo's size at an apex.
+  const PJ = { deg: [16, 32, 46, 61, 76], H: 7.7, sx: 0.55, y0: -3.85, size: 0.4 };
+  PJ.arcs = [];
+  for (const side of [-1, 1]) for (const dg of PJ.deg) {
+    const th = (dg * PI) / 180, sn = Math.sin(th);
+    PJ.arcs.push({ side, th, R: 4 * PJ.H * sn * Math.cos(th), top: PJ.H * sn * sn, n: Math.round(12 + 17 * sn), rate: 0.05 / sn });
+  }
+  { let first = 0; for (const a of PJ.arcs) { a.first = first; first += a.n; } PJ.n = first; }
+  function pjPose(i, o, s) {
+    let a = PJ.arcs[0];
+    for (const q of PJ.arcs) if (i >= q.first) a = q;
+    // Time through the flight (0 at launch, 1 on landing): the reach runs evenly with time, the height follows.
+    const tau = wrap((i - a.first) / a.n + s.t * a.rate + s.r * 0.05), r = a.R * tau;
+    const y = r * Math.tan(a.th) - (r * r) / (4 * PJ.H * Math.cos(a.th) ** 2), hf = y / a.top;
+    const sc = (0.42 + 0.58 * hf) * smooth(0.02, 0.12, tau) * smooth(0.98, 0.88, tau);
+    put(o, a.side * r * PJ.sx, PJ.y0 + y, hf * 0.3 + (i % 5) * 0.003, 0, 0, 0, sc);
+  }
   // Dodecahedron, now a layered photo sphere: three nested shells of photos — a small inner core, a middle shell and a
   // larger outer shell — each spread evenly over its ball (a Fibonacci spiral). Every photo faces outward but is spun to
   // its own angle and set a little nearer or farther, so each shell looks loose and hand-built; the inner shells show
@@ -5284,6 +5448,14 @@ transformed.y += bendAt(position.xz).x;`);
       extra: mgRun, view: { fixed: { pos: [0, 0, 30], target: [0, 0, 0], fov: 15.2 } },
       // The board, groove and balls are drawn by mgRun; the one card this shade needs stays hidden.
       pose(i, o) { put(o, 0, 0, -50, 0, 0, 0, 0); } },
+
+    // Parabola: photos gliding along an arch-shaped parabola, the one at its peak growing to lead.
+    S2('parabola', 'Parabola', 'Flows', { pal: 'tbFocus', deck: 'gravity', texW: 520, count: PB.n, w: PB.w, h: PB.h, corner: 0.06, spin: 0.2,
+      view: { fixed: { pos: [0, 0, 14], target: [0, 0, 0], fov: 40 } } }, pbPose),
+
+    // Trajectories: a fan of nested projectile arcs drawn only in photos streaming along them.
+    S2('trajectory', 'Trajectories', 'Flows', { pal: 'tbFocus', deck: 'gravity', texW: 220, count: PJ.n, w: PJ.size, h: PJ.size, corner: 0.2, spin: 0.2,
+      faceOf: (i) => (i * 5) % PC_PHOTOS.length, view: { fixed: { pos: [0, 0, 14], target: [0, 0, 0], fov: 40 } } }, pjPose),
 
     // ---- Architecture --------------------------------------------------------------------
     S2('guggenheim', 'Guggenheim', 'Architecture', { count: 38, w: 0.62, h: 0.75, view: { elev: 0.3, dist: 11 }, frame: { w: 0.6, h: 0.86 } },
@@ -6302,6 +6474,61 @@ transformed.y += bendAt(position.xz).x;`);
       dispose() { group.remove(...made); mirrors.forEach((m) => m.material.dispose()); veil.geometry.dispose(); veil.material.dispose(); tex.dispose(); },
     };
   }
+  // Baseline Row II: the same row bent into an arch: its baseline is a parabola, highest in the middle and falling
+  // toward both sides by BL.k times the square of the distance out, and every photo bends with it (its top and bottom
+  // edges follow the curve), so the whole row reads as one curved band. Its reflection is folded about the same curve.
+  BL.k = 0.033;
+  const blCurve = (x) => -BL.k * x * x;
+  // Baseline Row III: every photo filling its box up to one arch: the bottoms stand on the original flat baseline,
+  // and the tops all reach one bell curve: a rounded crest over the hero, steep shoulders, and long low tails easing
+  // out flat toward the screen's edges (BL.tail above the baseline, BL.sig the bell's spread), so the slices no longer
+  // step down but stand to the line.
+  BL.crest = BL.base + BL.H[0] * 1.2; BL.tail = 1.1; BL.sig = 3.1;
+  const blTop = (x) => BL.base + BL.tail + (BL.crest - BL.base - BL.tail) * Math.exp(-(x * x) / (2 * BL.sig * BL.sig));
+  // The height of the box at x: from the baseline arch up to the top arch.
+  const blBox = (x) => Math.max(0.05, blTop(x) - BL.base);
+  // Baseline Row IV: Baseline Row II's arched baseline with every photo filling its box up to a second, taller arch
+  // over the row (highest over the hero, falling to the screen's edges by BL.kt4 times the square of the distance
+  // out), so the photos follow the curve top and bottom and the slices stand tall to the line instead of stepping down.
+  BL.kt4 = 0.046; BL.crest4 = BL.base + BL.H[0];
+  const blTop4 = (x) => BL.crest4 - BL.kt4 * x * x;
+  const blBox4 = (x) => Math.max(0.05, blTop4(x) - (BL.base + blCurve(x)));
+  function blReflect2(group, L, faces) {
+    // The curve the row stands on: Baseline Row II's arch, or flat for a shade that stands on a straight baseline.
+    const bc = L.flatBase ? () => 0 : blCurve;
+    const holders = group.children.slice(0, L.count), made = [], _v = new V3();
+    const mirrors = holders.map((h, i) => {
+      const src = h.children[0].geometry, g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(src.attributes.position.count * 3), 3));
+      g.setAttribute('uv', src.attributes.uv); g.setIndex(src.index);
+      const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: faces[L.faceOf(i) % faces.length].tex, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }));
+      m.frustumCulled = false; m.renderOrder = -1; made.push(m); return m;
+    });
+    const c = document.createElement('canvas'); c.width = 4; c.height = 256; const g = c.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 256);
+    gr.addColorStop(0, 'rgba(236,236,236,0.15)'); gr.addColorStop(0.55, 'rgba(236,236,236,1)'); gr.addColorStop(1, 'rgba(236,236,236,1)');
+    g.fillStyle = gr; g.fillRect(0, 0, 4, 256);
+    const tex = new THREE.CanvasTexture(c); tex.encoding = THREE.sRGBEncoding;
+    // The fading veil over the reflection, bent along the same curve.
+    const vg = new THREE.PlaneGeometry(60, 4, 120, 1), vp = vg.attributes.position;
+    for (let k = 0; k < vp.count; k++) vp.setY(k, vp.getY(k) + BL.base - 2 + bc(vp.getX(k)));
+    const veil = new THREE.Mesh(vg, new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+    veil.position.z = 0.02; veil.renderOrder = 1; made.push(veil);
+    group.add(...made);
+    return {
+      tick() {
+        holders.forEach((h, i) => {
+          h.updateMatrix();
+          const src = h.children[0].geometry.attributes.position, dst = mirrors[i].geometry.attributes.position;
+          for (let k = 0; k < src.count; k++) {
+            _v.fromBufferAttribute(src, k).applyMatrix4(h.matrix);
+            dst.setXYZ(k, _v.x, 2 * (BL.base + bc(_v.x)) - _v.y, _v.z);
+          }
+          dst.needsUpdate = true; mirrors[i].visible = h.visible;
+        });
+      },
+      dispose() { group.remove(...made); mirrors.forEach((m) => { m.geometry.dispose(); m.material.dispose(); }); vg.dispose(); veil.material.dispose(); tex.dispose(); },
+    };
+  }
   // The row's position for photo i: it holds, then glides one place with a gentle sine ease. The glide ripples along the
   // row as a wave — each photo sets off BL.lag seconds after the one ahead of it in the direction of travel (the row
   // moves left, so the leftmost goes first) — so no photo ever closes on the one in front.
@@ -6560,6 +6787,44 @@ transformed.y += bendAt(position.xz).x;`);
       // A wide photo in the middle and slim slices stepping down on either side, all standing on one baseline, the row
       // gliding one place at a time; photos arrive and leave beyond the screen's edges.
       pose(i, o, s) { const f = blAt(i, s); put(o, f.x, BL.base + f.h / 2, 0, 0, 0, 0); } },
+    // Baseline Row II: Baseline Row bent into an arch, every photo curving along a parabola.
+    { key: 'baserow2', label: 'Baseline Row II', cat: 'Signature', pal: 'tbBase', deck: 'baserow', texW: 640, count: BL.n, w: 1, h: 1, bend: 0, corner: 0,
+      spin: 0.1, faceOf: (i) => i % DECKS.baserow.length, segs: [24, 2], extra: blReflect2,
+      view: { fixed: { pos: [0, 0, 30], target: [0, 0, 0], fov: 21 } },
+      // Each card takes its slot's size; the photo is cropped to that shape (a tall strip of it in a slice, the full
+      // width in the wide slot) rather than squeezed.
+      // Each card bends with the arch: every point drops by the curve at its own place across the screen.
+      deform: (i, s, L, u, v) => { const f = blAt(i, s); return [u * f.w, v * f.h + blCurve(f.x + u * f.w), 0]; },
+      deformUV: (i, s, L, u, v) => { const f = blAt(i, s), a = f.w / f.h, z = f.z; return a < 1 ? [0.5 + u * a * z, 0.5 + v * z] : [0.5 + u * z, 0.5 + (v / a) * z]; },
+      // A wide photo in the middle and slim slices stepping down on either side, all standing on one baseline, the row
+      // gliding one place at a time; photos arrive and leave beyond the screen's edges.
+      pose(i, o, s) { const f = blAt(i, s); put(o, f.x, BL.base + f.h / 2, 0, 0, 0, 0); } },
+    // Baseline Row III: the row on a flat baseline, every photo filling its box up to one arch over the row.
+    { key: 'baserow3', label: 'Baseline Row III', cat: 'Signature', pal: 'tbBase', deck: 'baserow', texW: 640, count: BL.n, w: 1, h: 1, bend: 0, corner: 0,
+      spin: 0.1, faceOf: (i) => i % DECKS.baserow.length, segs: [24, 2], extra: blReflect2, flatBase: true,
+      view: { fixed: { pos: [0, 0, 30], target: [0, 0, 0], fov: 21 } },
+      // Each card spans from the flat baseline up to the top arch at every point across it (placed in screen
+      // terms, the card itself sitting at height 0).
+      deform: (i, s, L, u, v) => {
+        const f = blAt(i, s), X = f.x + u * f.w, b = BL.base;
+        return [u * f.w, b + (v + 0.5) * (blTop(X) - b), 0];
+      },
+      // The photo is cropped to the box's shape (as tall as the box at its middle) rather than squeezed.
+      deformUV: (i, s, L, u, v) => { const f = blAt(i, s), a = f.w / blBox(f.x), z = f.z; return a < 1 ? [0.5 + u * a * z, 0.5 + v * z] : [0.5 + u * z, 0.5 + (v / a) * z]; },
+      pose(i, o, s) { const f = blAt(i, s); put(o, f.x, 0, 0, 0, 0, 0); } },
+    // Baseline Row IV: the arched row with every photo filling its box up to one arch over the row.
+    { key: 'baserow4', label: 'Baseline Row IV', cat: 'Signature', pal: 'tbBase', deck: 'baserow', texW: 640, count: BL.n, w: 1, h: 1, bend: 0, corner: 0,
+      spin: 0.1, faceOf: (i) => i % DECKS.baserow.length, segs: [24, 2], extra: blReflect2,
+      view: { fixed: { pos: [0, 0, 30], target: [0, 0, 0], fov: 21 } },
+      // Each card spans from the baseline arch up to the top arch at every point across it (placed in screen terms,
+      // the card itself sitting at height 0).
+      deform: (i, s, L, u, v) => {
+        const f = blAt(i, s), X = f.x + u * f.w, b = BL.base + blCurve(X);
+        return [u * f.w, b + (v + 0.5) * (blTop4(X) - b), 0];
+      },
+      // The photo is cropped to the box's shape (as tall as the box at its middle) rather than squeezed.
+      deformUV: (i, s, L, u, v) => { const f = blAt(i, s), a = f.w / blBox4(f.x), z = f.z; return a < 1 ? [0.5 + u * a * z, 0.5 + v * z] : [0.5 + u * z, 0.5 + (v / a) * z]; },
+      pose(i, o, s) { const f = blAt(i, s); put(o, f.x, 0, 0, 0, 0, 0); } },
     SIG('discspine', 'Disc Spine', { deck: 'discspine', texW: 320, count: 96, w: 0.36, h: 0.72, corner: 0.22, view: { fixed: { pos: [0, 0.2, 9], target: [0.2, 0.2, 0], fov: 45 } },
       faceOf: (i) => ((i >> 1) * 3 + (i & 1) * 7) % 20 },
       // A DNA double helix of cards sweeping across the screen: it enters top left, crests, then dives toward you,
@@ -6830,6 +7095,8 @@ transformed.y += bendAt(position.xz).x;`);
   PALETTES.tbMeander = { ...mkPal({ bg: '#D7262E', ink: '#FFFFFF', accent: '#1C1C1C' }), bg: ['#E8453F', '#D7262E', '#A9141C'] };
   // Meander II's board: matte red.
   PALETTES.tbMarble = { ...mkPal({ bg: '#E8483B', ink: '#FFFFFF', accent: '#2C3653' }), bg: ['#EE5547', '#E8483B', '#D23A2E'] };
+  // Conveyor III's room: a dark studio, a touch lighter behind the band.
+  PALETTES.tbPaper = { ...mkPal({ bg: '#18181A', ink: '#F2F2F0', accent: '#F2F2F0', accentInk: '#111111' }), bg: ['#2B2B2E', '#1A1A1C', '#0F0F11'] };
   // Focus Row's ground: a soft light grey.
   PALETTES.tbFocus = { ...mkPal({ bg: '#ECECEC', ink: '#1A1A1A', accent: '#1A1A1A' }), bg: ['#F7F7F7', '#ECECEC', '#DADADA'] };
   // Baseline Row's ground: a soft light grey.
